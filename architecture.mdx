@@ -1,7 +1,7 @@
 ---
 title: "Platform Architecture: How AI Startup Analyzer Works"
 sidebarTitle: "Architecture"
-description: "Explore the AI Startup Analyzer architecture: NestJS backend, Next.js frontend, BullMQ job queue, Redis cache, Prisma + PostgreSQL, and 14 parallel AI agents."
+description: "Explore the AI Startup Analyzer architecture: NestJS backend, Next.js frontend, BullMQ job queue, Redis cache, Prisma + PostgreSQL, and 14 AI agents."
 ---
 
 AI Startup Analyzer is built as a TypeScript monorepo that separates concerns across four workspaces: two deployable applications and two shared packages. The backend receives HTTP requests, enqueues analysis jobs, and runs 14 AI agents in two coordinated parallel phases. The frontend streams live progress from the queue and renders the completed report. Redis serves both the job queue and the AI response cache, while Prisma and Neon PostgreSQL form the durable data layer.
@@ -27,14 +27,14 @@ Each workspace is a separate package within the pnpm workspace. Turborepo orches
 
 Every analysis follows the same end-to-end path from the HTTP layer through the queue and into the database.
 
-```
+```text
 Browser / curl
   └─► POST /analysis  (NestJS AnalysisController)
         └─► AnalysisService.create()  — persists record with status PENDING
               └─► BullMQ "analysis" queue  — job enqueued
                     └─► AnalysisProcessor.process()  — worker picks up job
                           ├─► Phase 1: 6 core agents (Promise.all)
-                          ├─► Phase 2: 8 advanced agents (Promise.allSettled)
+                          ├─► Phase 2: 7 advanced agents (Promise.allSettled)
                           ├─► Grounding pipeline (rule-based or AI-based)
                           └─► prisma.analysis.update()  — status COMPLETED
 ```
@@ -70,9 +70,9 @@ const [ideaAnalysis, marketResearch, competitorAnalysis, mvpPlan, monetization, 
 | `MonetizationAgent` | `MonetizationStrategy` |
 | `GoToMarketAgent` | `GoToMarketStrategy` |
 
-When Phase 1 completes, the job progress is updated to `89`. The combined `agentResults` object is passed as context to every Phase 2 agent.
+When Phase 1 completes, the job progress is updated to `90`. The combined `agentResults` object is passed as context to every Phase 2 agent.
 
-### Phase 2 — Eight Advanced Agents (parallel, fault-tolerant)
+### Phase 2 — Seven Advanced Agents (parallel, fault-tolerant)
 
 These agents synthesize their output from both the original idea and the Phase 1 results. They run with `Promise.allSettled` so that a single agent failure does not abort the entire analysis.
 
@@ -106,7 +106,7 @@ After Phase 2 resolves, `ComprehensiveIdeaAnalyzerAgent` runs as a final single-
 
 After Phase 2, the `FinalReport` output passes through a quality evaluation and grounding pipeline before being written to the database.
 
-```
+```text
 FinalReport output
   └─► evaluateFinalReportQuality()     — should grounding run?
         └─► decideGroundingStrategy()  — rule-based or AI-based?

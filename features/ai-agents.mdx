@@ -1,7 +1,7 @@
 ---
-title: "14 Specialized AI Agents for Startup Analysis"
+title: "14 Specialized AI Agents Powering AI Startup Analyzer"
 sidebarTitle: "AI Agents"
-description: "Explore all 14 AI agents in AI Startup Analyzer: what each agent analyzes, what data it outputs, and how they work together in two parallel execution phases."
+description: "Explore all 14 AI agents in AI Startup Analyzer: what each agent analyzes, what it outputs, and how they work together in two parallel execution phases."
 ---
 
 Every analysis in AI Startup Analyzer is powered by a fleet of 14 purpose-built AI agents. Each agent implements a single shared interface and owns one focused domain — from market sizing and competitor mapping to brand identity and budget estimation. Running agents concurrently in two coordinated phases means you get a comprehensive, multi-dimensional startup report in the time it would take a single sequential process to finish just a few sections.
@@ -187,6 +187,17 @@ export interface MonetizationStrategy {
     price: string;
     features: string[];
   }>;
+}
+```
+
+### GoToMarketStrategy
+
+```typescript
+export interface GoToMarketStrategy {
+  marketingChannels: string[];
+  communities: string[];
+  partnerships: string[];
+  growthHacks: string[];
 }
 ```
 

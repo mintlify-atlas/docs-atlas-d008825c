@@ -1,7 +1,7 @@
 ---
 title: "Environment Variables Reference for AI Startup Analyzer"
 sidebarTitle: "Environment Variables"
-description: "Complete reference for all environment variables in AI Startup Analyzer. Covers database, Redis, AI providers, JWT, OAuth, grounding flags, and app settings."
+description: "Complete reference for all environment variables in AI Startup Analyzer. Covers database, Redis, AI providers, JWT, OAuth, and grounding flags."
 ---
 
 AI Startup Analyzer is configured entirely through environment variables. Copy `.env.example` to `.env` at the repository root and fill in values before starting the backend. The frontend uses a separate `apps/frontend/.env.local` file with a single variable. The sections below document every variable, note which ones are required, and explain the effect each one has at runtime.
@@ -13,7 +13,7 @@ AI Startup Analyzer uses [Neon](https://neon.tech) Postgres. Neon provides two c
 <ParamField path="DATABASE_URL" type="string" required>
   Pooled Neon connection string used by the running application for all database
   queries. Must include `?sslmode=require`. Example:
-  ```
+  ```env
   postgresql://neondb_owner:<password>@ep-<pooled-endpoint>-pooler.<region>.aws.neon.tech/neondb?sslmode=require
   ```
   The URL must point to the **pooler** endpoint (hostname contains `-pooler`).
@@ -23,7 +23,7 @@ AI Startup Analyzer uses [Neon](https://neon.tech) Postgres. Neon provides two c
 <ParamField path="DIRECT_DATABASE_URL" type="string" required>
   Direct (non-pooled) Neon connection string used exclusively by Prisma
   migrations (`prisma migrate deploy` / `prisma migrate dev`). Example:
-  ```
+  ```env
   postgresql://neondb_owner:<password>@ep-<direct-endpoint>.<region>.aws.neon.tech/neondb?sslmode=require
   ```
   This variable is read only during schema migration commands. The running

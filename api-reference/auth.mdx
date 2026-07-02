@@ -1,7 +1,7 @@
 ---
-title: "Auth Endpoints: Register, Login, OAuth"
+title: "Auth Endpoints: Register, Login, OAuth and Profile"
 sidebarTitle: "Auth Endpoints"
-description: "REST endpoints for user registration, login, token refresh, logout, Google OAuth, and current user profile in AI Startup Analyzer."
+description: "REST endpoints for user registration, login, token refresh, logout, Google OAuth, and profile retrieval in the AI Startup Analyzer API."
 ---
 
 The auth endpoints handle everything related to identity: creating accounts, issuing session cookies, renewing expired tokens, revoking sessions, authenticating through Google OAuth, and retrieving the currently signed-in user's profile. All auth routes live under the `/auth` prefix. For a detailed explanation of how cookies and CSRF tokens work together, see the [Authentication guide](/api-reference/authentication).
@@ -260,7 +260,7 @@ The following environment variables must be set on the backend:
 
 ### Usage
 
-```
+```text
 GET http://localhost:4000/auth/google
 ```
 

@@ -1,7 +1,7 @@
 ---
-title: "Deploy AI Startup Analyzer with Docker Compose"
+title: "Docker Compose Deployment for AI Startup Analyzer App"
 sidebarTitle: "Docker"
-description: "Deploy AI Startup Analyzer using Docker Compose for local development or full production stacks. Covers environment setup, container configuration, and health checks."
+description: "Deploy AI Startup Analyzer with Docker Compose for local development or production. Covers environment setup, container configuration, and health checks."
 ---
 
 AI Startup Analyzer ships with two Docker Compose configurations: a lightweight development file that spins up only the stateful services (PostgreSQL and Redis) so you can run the backend and frontend natively, and a full production file that builds and orchestrates every container together. Both configurations use official Alpine-based images and include health checks so dependent services wait for their dependencies to be ready before starting.

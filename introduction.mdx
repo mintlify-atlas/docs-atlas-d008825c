@@ -1,5 +1,5 @@
 ---
-title: "AI Startup Analyzer: Multi-Agent Startup Idea Analysis Platform"
+title: "AI Startup Analyzer — Multi-Agent Idea Analysis Platform"
 sidebarTitle: "Introduction"
 description: "AI Startup Analyzer uses 14 parallel AI agents to turn any startup idea into a detailed report covering market, competition, MVP, monetization, and more."
 ---
@@ -12,7 +12,7 @@ Early-stage founders routinely make avoidable mistakes: building products nobody
 
 ## The 14 AI Agents
 
-Every analysis triggers all 14 agents. The first six run concurrently on the raw idea; the remaining eight run concurrently once those results are available, using the Phase 1 outputs as grounding context.
+Every analysis triggers all 14 agents. The first six run concurrently on the raw idea via `Promise.all`. Seven advanced agents then run concurrently via `Promise.allSettled` using the Phase 1 outputs as grounding context. Finally, `ComprehensiveIdeaAnalyzerAgent` runs as a single sequential step with full context from both phases.
 
 | Agent | What It Produces |
 |---|---|

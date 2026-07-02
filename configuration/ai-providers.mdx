@@ -1,7 +1,7 @@
 ---
-title: "Configure AI Providers: Gemini and OpenRouter"
+title: "Configuring AI Providers: Gemini 2.0 Flash and OpenRouter"
 sidebarTitle: "AI Providers"
-description: "Configure Google Gemini 2.0 Flash or OpenRouter as the AI backend for AI Startup Analyzer. Covers API key setup, provider priority, caching, and retry behavior."
+description: "Configure Google Gemini or OpenRouter as the AI backend for AI Startup Analyzer. Covers API key setup, provider priority, caching, and retry behavior."
 ---
 
 AI Startup Analyzer routes every text generation request through a single `AIService` class in the NestJS backend. That service supports two providers — **Google Gemini 2.0 Flash** and **OpenRouter** — and selects between them automatically based on which API keys are present at startup. You need at least one key configured for any analysis to run. Responses are cached in Redis to avoid redundant API calls, and a built-in retry loop handles transient failures from either provider.

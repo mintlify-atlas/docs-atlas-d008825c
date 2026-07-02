@@ -1,7 +1,7 @@
 ---
 title: "Final Report Grounding: Quality Assurance for AI Outputs"
 sidebarTitle: "Grounding"
-description: "Understand AI Startup Analyzer's grounding system that validates and improves final report quality using rule-based and AI-based strategies controlled by environment flags."
+description: "How AI Startup Analyzer's grounding system validates final reports using rule-based and AI-assisted strategies, controlled by environment flags."
 ---
 
 After the 14 specialized agents finish generating their sections and the final report is assembled, a grounding layer runs one last quality assurance pass before the report is persisted and returned to the client. Grounding is the mechanism that catches structural defects, weak or vague field values, out-of-range scores, and formatting inconsistencies — and either fixes them automatically or asks the AI model to improve only the affected sections. The two grounding strategies are independent, can be enabled or disabled through environment variables without redeploying code, and are designed to add minimal overhead to the analysis pipeline.

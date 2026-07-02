@@ -1,7 +1,7 @@
 ---
 title: "Analysis Endpoints: Create, Query, and Manage Reports"
 sidebarTitle: "Analysis Endpoints"
-description: "REST endpoints for creating startup analyses, polling progress, retrieving reports, regenerating sections, chatting about results, and managing usage in AI Startup Analyzer."
+description: "REST endpoints for creating startup analyses, polling progress, retrieving reports, regenerating sections, AI chat, and plan usage management."
 ---
 
 The analysis endpoints are the core of the AI Startup Analyzer platform. They allow you to submit a startup idea for multi-agent AI processing, track processing progress, retrieve completed reports broken down across 13 strategic dimensions, regenerate any individual section on demand, chat conversationally with AI about your results, and inspect your plan's usage limits. Every endpoint under `/analysis` requires a valid `accessToken` cookie — see the [Authentication guide](/api-reference/authentication) for how to obtain one. State-changing requests (`POST`, `DELETE`) also require an `X-XSRF-TOKEN` header — see the [CSRF section](/api-reference/authentication#csrf-protection).
@@ -347,6 +347,71 @@ The full `Analysis` object with all fields populated (those not yet generated re
 curl -s -b cookies.txt \
   http://localhost:4000/analysis/clx4k7m2v0000abc123xyz789
 ```
+
+---
+
+## GET /analysis/:id/idea-analysis
+
+Returns only the `ideaAnalysis` section of a completed analysis — a lightweight alternative to fetching the full record when you only need the core idea breakdown.
+
+**Requires:** `accessToken` cookie. The analysis must belong to the authenticated user.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  The CUID of the analysis whose idea-analysis section you want to retrieve.
+</ParamField>
+
+### Response
+
+Returns the `ideaAnalysis` object if it has been generated, or `null` if the analysis is still pending or the section has not yet been produced.
+
+<ResponseField name="summary" type="string">
+  One-paragraph summary of the startup idea.
+</ResponseField>
+
+<ResponseField name="coreProblem" type="string">
+  The core problem the idea is solving.
+</ResponseField>
+
+<ResponseField name="targetUsers" type="string[]">
+  List of target user personas identified for the idea.
+</ResponseField>
+
+<ResponseField name="industry" type="string">
+  Industry classification for the startup.
+</ResponseField>
+
+<ResponseField name="useCases" type="string[]">
+  Key use cases for the product or service.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl -s -b cookies.txt \
+  http://localhost:4000/analysis/clx4k7m2v0000abc123xyz789/idea-analysis
+```
+
+```json 200 Response
+{
+  "summary": "A B2B SaaS platform that uses machine learning to predict customer churn in subscription businesses.",
+  "coreProblem": "Subscription businesses lose revenue through undetected customer churn before retention can be applied.",
+  "targetUsers": ["Customer success managers", "SaaS founders", "Revenue operations teams"],
+  "industry": "Customer Success / SaaS Analytics",
+  "useCases": [
+    "Early churn detection and alerting",
+    "Automated retention campaign recommendations",
+    "Customer health score dashboards"
+  ]
+}
+```
+
+```json 200 Response — not yet generated
+null
+```
+
+</CodeGroup>
 
 ---
 

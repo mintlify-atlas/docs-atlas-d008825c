@@ -1,7 +1,7 @@
 ---
-title: "Authenticating API Requests"
+title: "Cookie and CSRF Authentication in AI Startup Analyzer"
 sidebarTitle: "Authentication"
-description: "How to authenticate with the AI Startup Analyzer API using JWT cookies, refresh tokens, and CSRF protection for state-changing requests."
+description: "Authenticate with AI Startup Analyzer using httpOnly JWT cookies, CSRF double-submit tokens, and the refresh token flow for session renewal."
 ---
 
 The AI Startup Analyzer API does not use `Authorization` headers or API keys. Instead, it relies on **httpOnly cookie-based JWT authentication** — a pattern that is both more secure against XSS attacks and simpler to use in browser-based applications. This page explains exactly how cookies are issued, how to send them with every request, how to renew an expired access token, and how to satisfy the CSRF requirement on state-changing calls.

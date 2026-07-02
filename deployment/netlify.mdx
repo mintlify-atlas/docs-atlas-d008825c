@@ -1,7 +1,7 @@
 ---
-title: "Deploy the Frontend to Netlify"
+title: "Deploy AI Startup Analyzer Frontend to Netlify Guide"
 sidebarTitle: "Netlify"
-description: "Deploy the AI Startup Analyzer Next.js frontend to Netlify. Configure build commands, publish directory, and the NEXT_PUBLIC_API_URL environment variable."
+description: "Deploy the AI Startup Analyzer Next.js frontend to Netlify. Covers build command, publish directory, and the NEXT_PUBLIC_API_URL environment variable."
 ---
 
 Netlify is used exclusively for deploying the Next.js frontend application. The NestJS backend, BullMQ workers, and Redis queue are not hosted on Netlify — they must be deployed separately using Docker Compose, a cloud container platform, or a PaaS provider such as Render. Once your backend is live and you know its public URL, you can connect your GitHub repository to Netlify and have the frontend deploying automatically on every push to `main`.

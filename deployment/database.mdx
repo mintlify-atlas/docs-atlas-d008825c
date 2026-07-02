@@ -1,7 +1,7 @@
 ---
-title: "Database Setup and Migrations with Prisma"
+title: "AI Startup Analyzer Database Setup and Migration Guide"
 sidebarTitle: "Database"
-description: "Set up Neon PostgreSQL and manage schema migrations with Prisma 6 in AI Startup Analyzer. Covers connection strings, migration commands, and Prisma Studio."
+description: "Set up Neon PostgreSQL and run Prisma 6 migrations in AI Startup Analyzer. Covers connection strings, migration commands, and Prisma Studio."
 ---
 
 AI Startup Analyzer uses Prisma 6 as its ORM and Neon PostgreSQL as the recommended managed database provider, though any standard PostgreSQL instance works equally well. The schema defines three models — `User`, `RefreshToken`, and `Analysis` — and the `Analysis` model stores the outputs of more than a dozen AI agents as JSON strings alongside a set of numeric scores that power the startup evaluation dashboard. This page walks through configuring your connection strings, understanding the schema, and running migrations safely across development, staging, and production environments.

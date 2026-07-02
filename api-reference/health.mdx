@@ -1,7 +1,7 @@
 ---
-title: "GET /health — Health Check Endpoint"
+title: "Health Check Endpoint: GET /health — API Reference"
 sidebarTitle: "Health Check"
-description: "GET /health returns the API server status. Use this endpoint for uptime monitoring, load balancer health checks, and container readiness probes."
+description: "GET /health returns server status and timestamp. Use for load balancer health checks, container liveness and readiness probes, and uptime monitoring."
 ---
 
 The health check endpoint provides a lightweight, unauthenticated way to verify that the AI Startup Analyzer API server is running and able to handle requests. It returns a minimal JSON payload with a static `"ok"` status and a current server timestamp. Because it involves no database queries, no authentication, and no business logic, it responds in under a millisecond and is safe to poll as frequently as your infrastructure requires.

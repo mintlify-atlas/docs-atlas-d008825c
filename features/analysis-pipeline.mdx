@@ -1,7 +1,7 @@
 ---
-title: "Analysis Pipeline: From Idea to Report"
+title: "Analysis Pipeline: From Idea Submission to Final Report"
 sidebarTitle: "Analysis Pipeline"
-description: "Understand the AI Startup Analyzer pipeline: how a startup idea flows from submission through BullMQ queuing, parallel agent execution, grounding, and report storage."
+description: "Understand the AI Startup Analyzer pipeline: from idea submission through BullMQ queuing, parallel agent execution, and final report storage."
 ---
 
 When you submit a startup idea, it travels through a structured pipeline that spans HTTP ingestion, a BullMQ job queue, two parallel agent execution phases, a report quality and grounding step, and a final database write. Understanding each stage helps you interpret progress indicators, troubleshoot failures, and make the most of per-section regeneration when you want to refresh a single part of the report without re-running the full analysis.

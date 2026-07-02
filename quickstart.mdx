@@ -1,5 +1,5 @@
 ---
-title: "Get Started with AI Startup Analyzer"
+title: "Quickstart: Run AI Startup Analyzer Locally in Minutes"
 sidebarTitle: "Quickstart"
 description: "Set up AI Startup Analyzer locally in under 10 minutes. Install dependencies, configure environment variables, start Redis, and run your first analysis."
 ---
@@ -152,7 +152,7 @@ This guide walks you through running AI Startup Analyzer on your local machine f
 
     Once the servers start, you will see:
 
-    ```
+    ```text
     🚀 Backend running on http://localhost:4000
     ✓ Ready on http://localhost:3000
     ```
@@ -202,7 +202,7 @@ This guide walks you through running AI Startup Analyzer on your local machine f
     }
     ```
 
-    The `progress` field moves from `0` → `5` (queued) → `89` (Phase 1 complete) → `98` (Phase 2 complete) → `100` (database written). When `status` is `COMPLETED`, fetch the full report:
+    The `progress` field moves from `0` → `5` (job picked up) → `90` (Phase 1 complete) → `98` (Phase 2 and grounding complete) → `100` (ComprehensiveIdeaAnalyzer complete, database written). When `status` is `COMPLETED`, fetch the full report:
 
     ```bash
     curl http://localhost:4000/analysis/clx9f2m3k0000abc123def456 \
