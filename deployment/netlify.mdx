@@ -1,0 +1,78 @@
+---
+title: "Deploy the Frontend to Netlify"
+sidebarTitle: "Netlify"
+description: "Deploy the AI Startup Analyzer Next.js frontend to Netlify. Configure build commands, publish directory, and the NEXT_PUBLIC_API_URL environment variable."
+---
+
+Netlify is used exclusively for deploying the Next.js frontend application. The NestJS backend, BullMQ workers, and Redis queue are not hosted on Netlify — they must be deployed separately using Docker Compose, a cloud container platform, or a PaaS provider such as Render. Once your backend is live and you know its public URL, you can connect your GitHub repository to Netlify and have the frontend deploying automatically on every push to `main`.
+
+## What Gets Deployed
+
+Netlify builds and hosts the `@ai-analyzer/frontend` Next.js package from the monorepo. The build output is placed at `apps/frontend/.next`. The `netlify.toml` file at the repository root configures the build command, publish directory, and base directory so Netlify understands the monorepo layout without any manual UI configuration.
+
+```toml
+[build]
+  command = "pnpm --filter @ai-analyzer/frontend build"
+  publish = "apps/frontend/.next"
+  base = "."
+```
+
+<Note>
+Netlify must be able to resolve `NEXT_PUBLIC_API_URL` at **build time** because Next.js inlines public environment variables during the build step. Set this variable in the Netlify UI under **Site configuration → Environment variables** before triggering your first production build, and redeploy any time the backend URL changes.
+</Note>
+
+## Step-by-Step Deployment
+
+<Steps>
+
+### Connect your GitHub repository
+
+Log in to [app.netlify.com](https://app.netlify.com) and click **Add new site → Import an existing project**. Select **GitHub** as the Git provider, authorise Netlify if prompted, then choose the `AI-Startup-Analyzer` repository.
+
+### Confirm the build settings
+
+Netlify will detect the `netlify.toml` at the repository root and pre-fill the build settings automatically. Verify they match the values below before continuing:
+
+| Setting | Value |
+|---|---|
+| **Base directory** | `.` (repository root) |
+| **Build command** | `pnpm --filter @ai-analyzer/frontend build` |
+| **Publish directory** | `apps/frontend/.next` |
+
+If the fields are not pre-filled, enter them manually in the **Build settings** form.
+
+### Add the required environment variable
+
+Before clicking **Deploy**, navigate to **Advanced build settings → Environment variables** (or add it later under **Site configuration → Environment variables**) and add the following variable:
+
+| Key | Value |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | The full public URL of your deployed backend, e.g. `https://api.example.com` |
+
+This value is baked into the Next.js bundle at build time and tells the frontend where to send API requests.
+
+<Note>
+Do **not** include a trailing slash in `NEXT_PUBLIC_API_URL`. The frontend constructs request paths such as `/auth/login` and prepends this base URL directly.
+</Note>
+
+### Deploy the site
+
+Click **Deploy site**. Netlify will clone the repository, install dependencies using `pnpm`, run the build command, and publish the output from `apps/frontend/.next`. The first build typically takes two to four minutes.
+
+### Verify the deployment
+
+Once the deploy log shows **"Site is live"**, open the Netlify-assigned URL (e.g. `https://your-site-name.netlify.app`) in a browser. You should see the AI Startup Analyzer login page. Open the browser's network panel and confirm that API requests are going to the correct backend URL.
+
+</Steps>
+
+## Continuous Deployment
+
+After the initial setup, Netlify automatically triggers a new build and deployment every time you push to the branch you selected during setup (typically `main`). Pull request previews are also created for every open PR, giving you a unique URL to review frontend changes before merging.
+
+<Tip>
+Set `NEXT_PUBLIC_API_URL` to your staging backend URL in Netlify's **Deploy previews** environment scope and to your production backend URL in the **Production** scope. This way PR previews hit the staging API while production deploys always point at the production backend.
+</Tip>
+
+## Backend Deployment
+
+The Netlify deployment covers only the frontend. The backend must be running and publicly accessible before the frontend can serve real data. Refer to the [Docker deployment guide](/deployment/docker) for instructions on running the full stack with Docker Compose, including the NestJS API, BullMQ workers, and Redis.

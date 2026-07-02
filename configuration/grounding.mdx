@@ -1,0 +1,120 @@
+---
+title: "Final Report Grounding: Quality Assurance for AI Outputs"
+sidebarTitle: "Grounding"
+description: "Understand AI Startup Analyzer's grounding system that validates and improves final report quality using rule-based and AI-based strategies controlled by environment flags."
+---
+
+After the 14 specialized agents finish generating their sections and the final report is assembled, a grounding layer runs one last quality assurance pass before the report is persisted and returned to the client. Grounding is the mechanism that catches structural defects, weak or vague field values, out-of-range scores, and formatting inconsistencies — and either fixes them automatically or asks the AI model to improve only the affected sections. The two grounding strategies are independent, can be enabled or disabled through environment variables without redeploying code, and are designed to add minimal overhead to the analysis pipeline.
+
+## What Grounding Does
+
+The grounding system operates on the `FinalReport` object produced by the final report agent. It has two distinct modes that can run separately or together.
+
+**Rule-based grounding** applies a set of deterministic, in-process transformations with no external calls:
+
+- Normalizes all text fields by collapsing internal whitespace and trimming leading/trailing space.
+- De-duplicates the `risks` array and removes empty strings.
+- Inserts a fallback risk entry (`"Potential execution risk requires further validation."`) when the risks list is empty after de-duplication.
+- Clamps all numeric score fields (`marketDemand`, `competition`, `executionDifficulty`, `profitPotential`, `overall`) to the valid range of 0–10.
+
+**AI-based grounding** identifies fields whose content is too short, too generic, or matches known weak-text patterns (e.g. `"various competitors"`, `"good potential"`, `"needs more analysis"`), builds a targeted prompt containing only those weak fields, and asks the configured AI provider to improve them. The model returns a JSON patch that is validated and applied field-by-field. A maximum of **one AI grounding call** is permitted per analysis request to cap the additional API quota consumed.
+
+## Grounding Strategy Decision
+
+Grounding is not unconditional. The quality evaluator in the final report agent produces a `GroundingQualitySignal` that contains a boolean `shouldGround` flag and a `reason` string. The `decideGroundingStrategy` function reads that signal and decides which mode to activate:
+
+| Quality signal reason contains | Strategy selected | Reason |
+|---|---|---|
+| `shouldGround = false` | Neither | Report passed quality checks; no grounding needed |
+| `"low confidence"` or `"too many issues"` | AI grounding | Structural problems require model-level intervention |
+| `"formatting"` or `"minor cleanup"` | Rule-based grounding | Surface issues that deterministic rules can fix |
+| Any other reason | Rule-based grounding (default) | Conservative fallback when reason is unclassified |
+
+This means grounding overhead is zero for reports that already meet quality thresholds — no rules run and no AI calls are made.
+
+## Adaptive Grounding and Event Logging
+
+The `adaptiveGroundingTrigger` function wraps the grounding execution and emits structured log events for every invocation. Each event records:
+
+- `action`: whether grounding was `"applied"` or `"skipped"`.
+- `attemptNumber`: which grounding iteration this is (supports future multi-pass extension).
+- `reason`: the quality signal reason string.
+- `sourceReportHash`: SHA-256 of the report before grounding.
+- `resultReportHash`: SHA-256 of the report after grounding.
+
+<Note>
+  Comparing `sourceReportHash` and `resultReportHash` in the event log tells
+  you precisely whether a grounding pass made any structural change to the
+  report. Identical hashes mean the grounding function ran but produced no
+  diff — a useful signal when tuning quality thresholds or debugging why
+  expected corrections are not being applied.
+</Note>
+
+## Enabling and Disabling Grounding
+
+Both strategies are **enabled by default**. The flags use a "disabled only if explicitly set to `false`" pattern, so omitting either variable keeps that strategy active.
+
+```env
+# Default behaviour — both strategies active
+ENABLE_AI_GROUNDING="true"
+ENABLE_RULE_GROUNDING="true"
+
+# Disable AI grounding to save API quota (rule-based still runs)
+ENABLE_AI_GROUNDING="false"
+ENABLE_RULE_GROUNDING="true"
+
+# Disable all grounding
+ENABLE_AI_GROUNDING="false"
+ENABLE_RULE_GROUNDING="false"
+```
+
+The flags are read at process startup by `grounding-flags.ts`. Changing them requires a process restart; there is no hot-reload path.
+
+```ts
+// apps/backend/src/config/grounding-flags.ts
+export const groundingFlags = {
+  enableAIGrounding: process.env.ENABLE_AI_GROUNDING !== 'false',
+  enableRuleGrounding: process.env.ENABLE_RULE_GROUNDING !== 'false',
+};
+```
+
+Any value other than the string `"false"` — including `"true"`, `"1"`, `"yes"`, or an absent variable — leaves the strategy enabled.
+
+## AI Grounding Quota Limit
+
+The AI grounding pass is capped at **one call per analysis request** by `grounding-limits.ts`. This hard limit prevents a pathological report from triggering repeated AI improvement loops that would exhaust API quota.
+
+```ts
+// apps/backend/src/config/grounding-limits.ts
+export const groundingLimits = {
+  maxAIGroundingCallsPerRequest: 1,
+};
+```
+
+<Warning>
+  AI grounding consumes an additional API call (Gemini or OpenRouter) on top of
+  the calls made by the 14 analysis agents. For high-volume deployments, monitor
+  your provider usage dashboard and consider setting `ENABLE_AI_GROUNDING="false"`
+  during load testing or if API costs become a concern. Rule-based grounding
+  remains available at no additional cost and handles the most common structural
+  issues.
+</Warning>
+
+## Fields Targeted by AI Grounding
+
+The AI grounding pass inspects the following fields for weakness before building its improvement prompt. A field is considered weak if its text is shorter than 45 characters or matches any of the generic language patterns.
+
+| Field | Type | Weakness criteria |
+|---|---|---|
+| `ideaSummary` | `string` | Length \< 45 chars or generic phrase match |
+| `problem` | `string` | Length \< 45 chars or generic phrase match |
+| `targetMarket` | `string` | Length \< 45 chars or generic phrase match |
+| `marketAnalysis` | `string` | Length \< 45 chars or generic phrase match |
+| `competitors` | `string` | Length \< 45 chars or generic phrase match |
+| `mvp` | `string` | Length \< 45 chars or generic phrase match |
+| `monetization` | `string` | Length \< 45 chars or generic phrase match |
+| `goToMarket` | `string` | Length \< 45 chars or generic phrase match |
+| `verdict` | `string` | Length \< 45 chars or generic phrase match |
+| `risks` | `string[]` | Fewer than 2 items, or any item \< 20 chars or generic |
+
+Generic language patterns detected include phrases such as `"various competitors"`, `"many competitors"`, `"there are many risks"`, `"good market"`, `"good potential"`, `"strong potential"`, and `"needs more analysis"`. Only fields that are actually weak are included in the AI prompt — fields that pass inspection are never sent to the model and are never modified.

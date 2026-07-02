@@ -1,0 +1,185 @@
+---
+title: "Deploy AI Startup Analyzer with Docker Compose"
+sidebarTitle: "Docker"
+description: "Deploy AI Startup Analyzer using Docker Compose for local development or full production stacks. Covers environment setup, container configuration, and health checks."
+---
+
+AI Startup Analyzer ships with two Docker Compose configurations: a lightweight development file that spins up only the stateful services (PostgreSQL and Redis) so you can run the backend and frontend natively, and a full production file that builds and orchestrates every container together. Both configurations use official Alpine-based images and include health checks so dependent services wait for their dependencies to be ready before starting.
+
+## Local Development
+
+In development the recommended workflow is to use Docker only for the infrastructure services — PostgreSQL and Redis — while running the NestJS backend and Next.js frontend directly on your machine with `pnpm dev`. This lets you take advantage of hot-reloading and fast TypeScript compilation without rebuilding images on every change.
+
+<Steps>
+
+### Clone the repository and install dependencies
+
+```bash
+git clone https://github.com/Abbaddii-99/AI-Startup-Analyzer.git
+cd AI-Startup-Analyzer
+pnpm install
+```
+
+### Copy the example environment file
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in your `DATABASE_URL`, `DIRECT_DATABASE_URL`, and any AI API keys. The default values for `REDIS_HOST`, `REDIS_PORT`, `BACKEND_PORT`, and `FRONTEND_URL` match the Docker Compose service definitions and work without changes for local development.
+
+### Start PostgreSQL and Redis
+
+```bash
+docker compose up -d
+```
+
+This command starts the two services defined in `docker-compose.yml` and leaves them running in the background. Both containers expose their standard ports to `localhost` and persist data in named volumes.
+
+```yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-analyzer-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ai_analyzer
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-analyzer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+```
+
+### Apply database migrations
+
+```bash
+pnpm db:migrate:deploy
+```
+
+### Start the backend and frontend
+
+```bash
+pnpm dev
+```
+
+The NestJS API will be available on `http://localhost:4000` and the Next.js frontend on `http://localhost:3000`.
+
+</Steps>
+
+## Production Deployment
+
+The production Docker Compose file (`docker-compose.prod.yml`) builds the backend and frontend from their respective multi-stage Dockerfiles and runs the entire stack — Redis, backend, and frontend — as a coordinated set of containers inside a dedicated bridge network. PostgreSQL is intentionally omitted from the production Compose file because the production stack is designed to connect to an external managed database such as Neon.
+
+<Steps>
+
+### Copy and configure the production environment file
+
+```bash
+cp .env.example .env.prod
+```
+
+Edit `.env.prod` and set the following required values before deploying:
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | Pooled connection string from your Neon (or other PostgreSQL) project |
+| `DIRECT_DATABASE_URL` | Direct (non-pooled) connection string used by Prisma for migrations |
+| `REDIS_PASSWORD` | A strong random password for the Redis instance |
+| `JWT_SECRET` | A long, random string used to sign JWT tokens |
+| `GEMINI_API_KEY` | Your Google Gemini API key (or leave blank if using OpenRouter) |
+| `OPENROUTER_API_KEY` | Your OpenRouter API key (or leave blank if using Gemini) |
+| `FRONTEND_URL` | The public URL of the frontend, e.g. `https://app.example.com` |
+| `BACKEND_URL` | The public URL of the backend API, passed to the frontend build as `NEXT_PUBLIC_API_URL` |
+
+### Build and launch the production stack
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+```
+
+Docker Compose will build the backend and frontend images, then start the containers in dependency order: Redis first, then the backend once Redis is healthy, and finally the frontend once the backend is running.
+
+### Verify the containers are healthy
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+```
+
+All three services should show a `running` or `healthy` status. The backend exposes a `/health` endpoint that the container health check polls every 30 seconds.
+
+</Steps>
+
+## Port Mappings
+
+| Service | Container Port | Host Port |
+|---|---|---|
+| Backend (NestJS API) | 4000 | 4000 |
+| Frontend (Next.js) | 3000 | 3000 |
+| PostgreSQL | 5432 | 5432 |
+| Redis | 6379 | 6379 |
+
+## Automatic Database Migrations
+
+The backend container's startup command runs `prisma migrate deploy` before launching the NestJS API server. This means every time the backend container starts it applies any pending committed migrations to the database automatically — no manual migration step is needed after a deployment.
+
+The relevant section of `apps/backend/Dockerfile` is:
+
+```dockerfile
+CMD ["sh", "-c", "cd /app/packages/db && pnpm exec prisma migrate deploy && cd /app/apps/backend && node dist/main.js"]
+```
+
+<Warning>
+If `prisma migrate deploy` fails — for example because `DATABASE_URL` or `DIRECT_DATABASE_URL` is incorrect, or the database is unreachable — the backend container will exit immediately with a non-zero code. Check the container logs with `docker compose -f docker-compose.prod.yml logs backend` to diagnose migration errors before restarting.
+</Warning>
+
+## Useful Commands
+
+<CodeGroup>
+
+```bash View logs
+# Tail logs for all services
+docker compose -f docker-compose.prod.yml logs -f
+
+# Tail logs for the backend only
+docker compose -f docker-compose.prod.yml logs -f backend
+```
+
+```bash Stop and remove containers
+docker compose -f docker-compose.prod.yml down
+```
+
+```bash Remove containers and volumes
+# WARNING: this deletes all Redis data
+docker compose -f docker-compose.prod.yml down -v
+```
+
+```bash Restart a single service
+docker compose -f docker-compose.prod.yml restart backend
+```
+
+</CodeGroup>

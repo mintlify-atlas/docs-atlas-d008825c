@@ -1,0 +1,128 @@
+---
+title: "GET /health — Health Check Endpoint"
+sidebarTitle: "Health Check"
+description: "GET /health returns the API server status. Use this endpoint for uptime monitoring, load balancer health checks, and container readiness probes."
+---
+
+The health check endpoint provides a lightweight, unauthenticated way to verify that the AI Startup Analyzer API server is running and able to handle requests. It returns a minimal JSON payload with a static `"ok"` status and a current server timestamp. Because it involves no database queries, no authentication, and no business logic, it responds in under a millisecond and is safe to poll as frequently as your infrastructure requires.
+
+---
+
+## GET /health
+
+Returns the current server status and a UTC timestamp.
+
+### Authentication
+
+**None required.** This endpoint is intentionally public so that load balancers, container orchestrators, and external uptime monitors can reach it without credentials.
+
+### Response
+
+<ResponseField name="status" type="string">
+  Always `"ok"` when the server process is running and the HTTP stack is healthy.
+</ResponseField>
+
+<ResponseField name="timestamp" type="string">
+  Current server time as an ISO 8601 UTC string (e.g. `"2024-06-15T10:30:00.000Z"`). Useful for verifying the server's clock and confirming the response is live rather than cached.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl -s http://localhost:4000/health
+```
+
+```json 200 Response
+{
+  "status": "ok",
+  "timestamp": "2024-06-15T10:30:00.000Z"
+}
+```
+
+</CodeGroup>
+
+---
+
+## Use Cases
+
+### Load Balancer Health Check
+
+Configure your load balancer (AWS ALB, NGINX, HAProxy, etc.) to poll `GET /health` and route traffic only to instances that return HTTP `200`. If the process crashes or becomes unresponsive, the endpoint stops responding and the load balancer removes the instance from the pool automatically.
+
+```nginx
+# NGINX upstream health check example
+upstream backend {
+  server app1:4000;
+  server app2:4000;
+}
+
+location /health {
+  proxy_pass http://backend;
+  access_log off;
+}
+```
+
+### Container Readiness and Liveness Probes
+
+In Docker Compose or Kubernetes, point your healthcheck / probe at this endpoint to determine when the container is ready to serve traffic and whether it should be restarted.
+
+<Note>
+  Use this endpoint for both **liveness probes** (is the process alive?) and **readiness probes** (is the process ready to receive traffic?) in Kubernetes. The response time is negligible — a 2-second timeout and 5-second interval are more than sufficient.
+</Note>
+
+```dockerfile
+# Docker HEALTHCHECK instruction
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:4000/health || exit 1
+```
+
+```yaml
+# Kubernetes liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 4000
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 4000
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+```
+
+### Uptime Monitoring
+
+External monitoring services (UptimeRobot, Better Uptime, Checkly, Pingdom, etc.) can ping `GET /health` on a 30-second or 1-minute interval to track API availability and alert on downtime.
+
+```bash
+# Simple shell-based uptime check
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/health)
+if [ "$STATUS" != "200" ]; then
+  echo "API health check failed with status $STATUS"
+  exit 1
+fi
+echo "API is healthy"
+```
+
+<Tip>
+  When running the health check behind a reverse proxy or API gateway, ensure the `/health` path is **not** subject to authentication middleware or rate limiting. Blocking this route causes false-positive failures in your monitoring pipeline.
+</Tip>
+
+---
+
+## What This Endpoint Does Not Check
+
+The `GET /health` endpoint confirms that the **HTTP server process** is alive. It does not verify:
+
+- **Database connectivity** — a healthy response does not guarantee Prisma can reach the database.
+- **Redis / BullMQ queue availability** — the analysis job queue may be unavailable even when this endpoint returns `200`.
+- **AI service reachability** — the OpenAI/Anthropic API connection is not tested here.
+
+For deeper infrastructure health monitoring, consider adding a separate `/health/ready` endpoint that performs active checks on each dependency.

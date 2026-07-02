@@ -1,0 +1,279 @@
+---
+title: "14 Specialized AI Agents for Startup Analysis"
+sidebarTitle: "AI Agents"
+description: "Explore all 14 AI agents in AI Startup Analyzer: what each agent analyzes, what data it outputs, and how they work together in two parallel execution phases."
+---
+
+Every analysis in AI Startup Analyzer is powered by a fleet of 14 purpose-built AI agents. Each agent implements a single shared interface and owns one focused domain — from market sizing and competitor mapping to brand identity and budget estimation. Running agents concurrently in two coordinated phases means you get a comprehensive, multi-dimensional startup report in the time it would take a single sequential process to finish just a few sections.
+
+## Agent Interface
+
+All agents share the same TypeScript contract. The `context` parameter is omitted for Phase 1 agents (which work from the raw idea only) and populated with Phase 1 results for Phase 2 agents.
+
+```typescript
+export interface Agent<T> {
+  execute(idea: string, context?: any): Promise<T>;
+}
+```
+
+## All 14 Agents
+
+<CardGroup cols={2}>
+  <Card title="IdeaAnalyzerAgent" icon="lightbulb">
+    Validates the core problem statement, identifies target users, classifies the industry, and enumerates concrete use cases. Runs in **Phase 1** with no prior context.
+  </Card>
+  <Card title="MarketResearchAgent" icon="chart-line">
+    Sizes the market with TAM, SAM, and SOM estimates, identifies industry growth trends, and surfaces geographic expansion opportunities. Runs in **Phase 1**.
+  </Card>
+  <Card title="CompetitorAnalysisAgent" icon="users">
+    Maps both direct and indirect competitors, listing each competitor's strengths, weaknesses, and known pricing. Runs in **Phase 1**.
+  </Card>
+  <Card title="MVPGeneratorAgent" icon="rocket">
+    Produces a prioritized feature list (Must Have / Should Have / Nice to Have), defines four feedback loops, sets four KPIs with numeric targets, and estimates development complexity and timeline. Runs in **Phase 1**.
+  </Card>
+  <Card title="MonetizationAgent" icon="dollar-sign">
+    Recommends the best revenue model from subscription, freemium, usage-based, or enterprise licensing, and generates tiered pricing suggestions with per-tier feature lists. Runs in **Phase 1**.
+  </Card>
+  <Card title="GoToMarketAgent" icon="bullhorn">
+    Outlines the channels, communities, partnerships, and growth hacks needed to acquire the first 100 users. Runs in **Phase 1**.
+  </Card>
+  <Card title="FinalReportAgent" icon="file-lines">
+    Synthesizes all six Phase 1 outputs into a scored final report, including a venture-style verdict and numeric scores for marketDemand, competition, executionDifficulty, profitPotential, and overall. Runs in **Phase 2** with retry and repair logic.
+  </Card>
+  <Card title="RiskRadarAgent" icon="triangle-exclamation">
+    Identifies 6–8 risk factors, each rated by probability and impact (low / medium / high / critical), with an actionable mitigation strategy per risk. Runs in **Phase 2**.
+  </Card>
+  <Card title="RoadmapAgent" icon="map">
+    Builds a four-phase development roadmap with realistic week estimates, per-phase task lists (including role assignments), and a deliverable per phase. Runs in **Phase 2** with the MVP plan as context.
+  </Card>
+  <Card title="BusinessModelAgent" icon="building">
+    Evaluates the idea against all 43 known business model patterns, classifies each as applicable or not-applicable with reasoning and real-world examples, and identifies the single best primary model. Runs in **Phase 2**.
+  </Card>
+  <Card title="VisionMissionAgent" icon="eye">
+    Generates a concise vision statement (≤15 words), a mission statement (≤20 words), four core values, a unique value proposition, and a 40-word elevator pitch. Runs in **Phase 2**.
+  </Card>
+  <Card title="BrandIdentityAgent" icon="palette">
+    Creates three name suggestions with rationale, a tagline, a three-color palette with hex codes and usage guidelines, typography recommendations, tone of voice, and a brand story. Runs in **Phase 2** with idea analysis as context.
+  </Card>
+  <Card title="BudgetEstimatorAgent" icon="calculator">
+    Estimates startup costs across development, infrastructure, marketing, and operations categories, projects monthly burn rate, setup cost, runway, break-even month, and three-year revenue scenarios. Runs in **Phase 2**.
+  </Card>
+  <Card title="ComprehensiveIdeaAnalyzerAgent" icon="magnifying-glass-chart">
+    Holistically scores the idea across six dimensions — overall viability, market opportunity, competitive analysis, target audience fit, financial feasibility, and risk assessment — along with prioritized recommendations. Runs **last**, after all Phase 2 results are available.
+  </Card>
+</CardGroup>
+
+## Execution Phases
+
+The 14 agents are organized into two parallel phases plus a final singleton, ensuring that later agents have access to the full context built by earlier ones.
+
+<Steps>
+  <Step title="Phase 1 — Independent Agents (parallel)">
+    Six agents execute concurrently using `Promise.all`. They receive only the sanitized idea string as input and produce independent outputs that collectively describe the opportunity.
+
+    | Agent | Key Output |
+    |---|---|
+    | IdeaAnalyzerAgent | Problem, target users, industry, use cases |
+    | MarketResearchAgent | TAM / SAM / SOM, trends, geographies |
+    | CompetitorAnalysisAgent | Direct and indirect competitors |
+    | MVPGeneratorAgent | Feature list, KPIs, milestones, feasibility |
+    | MonetizationAgent | Revenue model, pricing tiers |
+    | GoToMarketAgent | Channels, communities, growth hacks |
+
+    Progress advances to **89%** when Phase 1 completes.
+  </Step>
+  <Step title="Phase 2 — Synthesis Agents (parallel, allSettled)">
+    Seven agents execute concurrently using `Promise.allSettled`, each receiving the full Phase 1 result object as context. Using `allSettled` means a failure in any single agent does not abort the others — the pipeline continues and logs the failure.
+
+    | Agent | Context Used |
+    |---|---|
+    | FinalReportAgent | All six Phase 1 outputs |
+    | RiskRadarAgent | All Phase 1 outputs |
+    | RoadmapAgent | MVP plan from Phase 1 |
+    | BusinessModelAgent | Monetization from Phase 1 |
+    | VisionMissionAgent | All Phase 1 outputs |
+    | BrandIdentityAgent | Idea analysis from Phase 1 |
+    | BudgetEstimatorAgent | Idea analysis + MVP plan from Phase 1 |
+
+    Progress advances to **98%** when Phase 2 completes.
+
+    <Note>
+      FinalReport is the only Phase 2 agent whose failure is fatal — the pipeline will throw and the analysis will be marked FAILED if FinalReport cannot produce a valid result. All other Phase 2 agent failures are logged as warnings and stored as `null` in the database.
+    </Note>
+  </Step>
+  <Step title="ComprehensiveIdeaAnalyzer (singleton, last)">
+    After Phase 2, the ComprehensiveIdeaAnalyzerAgent runs synchronously with the complete Phase 1 context. It produces six scored dimensions and prioritized recommendations. Progress advances to **100%** after the final database write.
+  </Step>
+</Steps>
+
+## TypeScript Output Types
+
+The following types are defined in `packages/shared/src/types/analysis.types.ts` and represent the data structures returned by each agent.
+
+### IdeaAnalysis
+
+```typescript
+export interface IdeaAnalysis {
+  summary: string;
+  coreProblem: string;
+  targetUsers: string[];
+  industry: string;
+  useCases: string[];
+}
+```
+
+### MarketResearch
+
+```typescript
+export interface MarketResearch {
+  marketDemand: string;
+  tam: string;
+  sam: string;
+  som: string;
+  growthTrends: string[];
+  geographicOpportunities: string[];
+}
+```
+
+### MVPPlan
+
+```typescript
+export interface MVPFeature {
+  title: string;
+  description: string;
+  priority: 'Must Have' | 'Should Have' | 'Nice to Have';
+}
+
+export interface MVPFeedbackLoop {
+  title: string;
+  description: string;
+  method: string;
+}
+
+export interface MVPKPI {
+  title: string;
+  target: string;
+  description: string;
+  timeframe: string;
+}
+
+export interface MVPFeasibilityItem {
+  question: string;
+  answer: string;
+  risk: 'Low' | 'Medium' | 'High';
+}
+
+export interface MVPPlan {
+  productName: string;
+  tagline: string;
+  coreFeatures: MVPFeature[];       // 4–6 items
+  feedbackLoops: MVPFeedbackLoop[]; // exactly 4
+  kpis: MVPKPI[];                   // exactly 4
+  iterationStrategy: string;
+  feasibilityChecks: MVPFeasibilityItem[]; // 4–5 items
+  developmentComplexity: 'Low' | 'Medium' | 'High';
+  estimatedTime: string;
+}
+```
+
+### MonetizationStrategy
+
+```typescript
+export interface MonetizationStrategy {
+  recommendedModel: 'subscription' | 'freemium' | 'usage-based' | 'enterprise';
+  reasoning: string;
+  pricingTiers?: Array<{
+    name: string;
+    price: string;
+    features: string[];
+  }>;
+}
+```
+
+### FinalReport
+
+```typescript
+export interface IdeaScore {
+  marketDemand: number;        // 0–10
+  competition: number;         // 0–10
+  executionDifficulty: number; // 0–10
+  profitPotential: number;     // 0–10
+  overall: number;             // 0–10
+}
+
+export interface FinalReport {
+  ideaSummary: string;
+  problem: string;
+  targetMarket: string;
+  marketAnalysis: string;
+  competitors: string;
+  mvp: string;
+  monetization: string;
+  goToMarket: string;
+  risks: string[];
+  verdict: string;
+  score: IdeaScore;
+}
+```
+
+### ComprehensiveIdeaAnalysis
+
+```typescript
+export interface ComprehensiveIdeaAnalysis {
+  overallViability: {
+    score: number;
+    assessment: string;
+    strengths: string[];
+    weaknesses: string[];
+  };
+  marketOpportunity: {
+    score: number;
+    assessment: string;
+    marketSize: string;
+    growthPotential: string;
+    timing: string;
+  };
+  competitiveAnalysis: {
+    score: number;
+    assessment: string;
+    competitiveAdvantage: string;
+    barriersToEntry: string;
+    differentiation: string[];
+  };
+  targetAudienceFit: {
+    score: number;
+    assessment: string;
+    audienceUnderstanding: string;
+    painPointsAddressed: string[];
+    valueProposition: string;
+  };
+  financialFeasibility: {
+    score: number;
+    assessment: string;
+    revenuePotential: string;
+    costStructure: string;
+    breakEvenAnalysis: string;
+    roiPotential: string;
+  };
+  riskAssessment: {
+    score: number;
+    assessment: string;
+    highRiskFactors: string[];
+    mitigationStrategies: string[];
+    probabilityOfSuccess: string;
+  };
+  recommendations: {
+    priority: string[];
+    quickWins: string[];
+    longTermStrategies: string[];
+    assessment: string;
+  };
+  finalScore: number;
+  detailedAnalysis: string;
+  generatedAt: string;
+}
+```
+
+## Partial Failure Tolerance
+
+Phase 2 uses `Promise.allSettled` instead of `Promise.all`, which means individual agent failures are isolated. If, for example, the `BrandIdentityAgent` encounters an error, the analysis still completes — `brandIdentity` is stored as `null` in the database and the failure is logged as a warning. The only agent whose failure is unrecoverable is `FinalReportAgent`, because the scoring columns that power the dashboard (`marketDemandScore`, `competitionScore`, `executionDifficultyScore`, `profitPotentialScore`, `overallScore`) are extracted directly from its output.

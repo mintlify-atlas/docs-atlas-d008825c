@@ -1,0 +1,120 @@
+---
+title: "Plans and Usage Limits"
+sidebarTitle: "Plans & Limits"
+description: "AI Startup Analyzer enforces per-user monthly analysis limits by plan tier. FREE users get 3 analyses/month, PRO gets 50, and TEAM gets unlimited."
+---
+
+AI Startup Analyzer enforces a monthly analysis quota for every user account. Quotas reset at the start of each calendar month and are checked atomically before any analysis job is created, ensuring that the limit is never silently exceeded even under concurrent requests. The plan tier assigned to each account determines the quota, and the system is architected to support billing integration through Stripe when subscription management is added.
+
+## Plan Tiers
+
+<CardGroup cols={3}>
+  <Card title="FREE" icon="seedling">
+    **3 analyses per month**
+
+    The default plan for all new accounts. Covers small-scale idea validation and exploration without any payment required.
+  </Card>
+  <Card title="PRO" icon="bolt">
+    **50 analyses per month**
+
+    Designed for founders and product teams who are actively iterating on multiple ideas or running regular competitive research cycles.
+  </Card>
+  <Card title="TEAM" icon="users">
+    **999 analyses per month**
+
+    Effectively unlimited for organizational use. Suited for accelerators, venture studios, or teams running high-volume analysis workflows.
+  </Card>
+</CardGroup>
+
+## Plan Limits Reference
+
+The canonical limit map is defined as a constant in `analysis.service.ts` and is the single source of truth across the codebase:
+
+```typescript
+export const PLAN_ANALYSIS_LIMITS: Record<string, number> = {
+  FREE: 3,
+  PRO: 50,
+  TEAM: 999,
+};
+```
+
+Any account whose plan is not recognized by this map falls back to the FREE limit of 3.
+
+## How Limits Are Enforced
+
+Every call to `POST /analysis` passes through `checkAndIncrementAnalysisLimit` before a database record or queue job is created. The check and increment sequence is:
+
+<Steps>
+  <Step title="Read Current Usage">
+    The service reads the user's `analysesThisMonth` counter and `monthResetAt` timestamp from the database.
+  </Step>
+  <Step title="Apply Monthly Reset if Needed">
+    If `monthResetAt` is earlier than the first day of the current calendar month, the effective count is treated as `0` — the counter has logically reset even if it hasn't been physically zeroed yet. The `monthResetAt` is updated to now during the subsequent increment.
+  </Step>
+  <Step title="Check Against Plan Limit">
+    If the effective count is greater than or equal to the plan's limit, the request is rejected immediately with a `409 Conflict` before any queue interaction occurs.
+  </Step>
+  <Step title="Atomic Increment">
+    If the count is within the limit, the counter is incremented using Prisma's `{ increment: 1 }` operation, which is atomic at the database level and safe under concurrent requests.
+  </Step>
+</Steps>
+
+## Monthly Reset
+
+The usage counter resets at the start of each calendar month. The reset is lazy — it does not run on a scheduled job. Instead, every time the limit is checked, the service compares `monthResetAt` to the first day of the current month. If the stored timestamp is from a previous month, the counter is logically treated as zero and the timestamp is refreshed on the next write.
+
+This means there is no batch reset job that could miss an account, and the reset behavior is consistent regardless of when during the month the first request of the new period arrives.
+
+## Checking Remaining Quota
+
+To see how many analyses the authenticated user has used and what their plan allows:
+
+```http
+GET /analysis/me/plan
+```
+
+**Response:**
+
+```json
+{
+  "plan": "FREE",
+  "used": 2,
+  "limit": 3
+}
+```
+
+The `used` field reflects the current `analysesThisMonth` value from the database. If the month has rolled over since the last analysis, the counter may still show the previous month's value until the next analysis request triggers the lazy reset — but the limit check will treat it as zero.
+
+## What Happens When the Limit Is Reached
+
+When a user submits an analysis after exhausting their monthly quota, the API responds with:
+
+```http
+HTTP/1.1 409 Conflict
+```
+
+```json
+{
+  "statusCode": 409,
+  "message": "Monthly limit reached (3 for FREE plan).",
+  "error": "Conflict"
+}
+```
+
+The message includes both the numeric limit and the plan name to make it straightforward to display a meaningful upgrade prompt in the UI. No analysis record is created, no queue job is enqueued, and the counter is not incremented.
+
+## Rate Limiting on Other Endpoints
+
+In addition to the monthly analysis quota, individual endpoints are rate-limited per user to prevent abuse:
+
+| Endpoint | Per Minute | Per Hour |
+|---|---|---|
+| `POST /auth/register` | 5 | 20 |
+| `POST /auth/login` | 10 | 50 |
+| Chat endpoints | 10 | — |
+
+Rate-limited requests receive a `429 Too Many Requests` response. These limits are separate from and independent of the monthly analysis quota.
+
+<Note>
+  The `User` schema includes `stripeCustomerId` and `stripeSubId` fields that are reserved for a future Stripe billing integration. When subscription management is implemented, plan upgrades and downgrades will be reflected in the `plan` field on the user record, and the limit map will automatically apply the correct quota on the user's next analysis request.
+</Note>

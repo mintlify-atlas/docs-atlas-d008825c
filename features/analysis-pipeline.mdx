@@ -1,0 +1,183 @@
+---
+title: "Analysis Pipeline: From Idea to Report"
+sidebarTitle: "Analysis Pipeline"
+description: "Understand the AI Startup Analyzer pipeline: how a startup idea flows from submission through BullMQ queuing, parallel agent execution, grounding, and report storage."
+---
+
+When you submit a startup idea, it travels through a structured pipeline that spans HTTP ingestion, a BullMQ job queue, two parallel agent execution phases, a report quality and grounding step, and a final database write. Understanding each stage helps you interpret progress indicators, troubleshoot failures, and make the most of per-section regeneration when you want to refresh a single part of the report without re-running the full analysis.
+
+## Full Pipeline Lifecycle
+
+<Steps>
+  <Step title="Idea Submission">
+    A client sends `POST /analysis` with the idea text in the request body. The `AnalysisService` first sanitizes the input — trimming whitespace, clamping to 2,000 characters, and stripping characters that could form prompt injections — before any further processing.
+
+    <Note>
+      Input sanitization removes angle brackets, quotes, backticks, the phrases "ignore previous/above/all instructions", and "system:" prefixes. Escaped newline sequences are collapsed to spaces. The maximum accepted length is **2,000 characters**.
+    </Note>
+  </Step>
+  <Step title="Monthly Limit Check and DB Record Creation">
+    Before queuing any work, `AnalysisService.checkAndIncrementAnalysisLimit` reads the authenticated user's plan and their `analysesThisMonth` counter. If the current calendar month has rolled over since the last reset, the counter is treated as zero. If the counter is at or above the plan limit, the request is rejected with a `409 Conflict`. Otherwise, the counter is atomically incremented and a new `Analysis` record is created in the database with `status: 'PENDING'`.
+  </Step>
+  <Step title="BullMQ Job Enqueue">
+    The new analysis is added to the `analysis` BullMQ queue using the analysis database ID as the `jobId`. Because BullMQ deduplicates jobs by `jobId`, submitting the same analysis ID twice will not create a duplicate job.
+
+    <Tip>
+      Using `jobId: analysis.id` means that if a network error causes the client to retry the submission before the first job is processed, BullMQ silently discards the duplicate. The original job proceeds normally.
+    </Tip>
+  </Step>
+  <Step title="Worker Picks Up the Job — Status: PROCESSING">
+    The `AnalysisProcessor` worker (a NestJS `@Processor('analysis')`) dequeues the job and immediately updates the analysis status to `PROCESSING` in the database. Job progress is set to **5%**.
+  </Step>
+  <Step title="Phase 1 — Six Independent Agents (parallel)">
+    Six agents run concurrently via `Promise.all`, each receiving only the sanitized idea string:
+
+    - **IdeaAnalyzerAgent** — problem, users, industry, use cases
+    - **MarketResearchAgent** — TAM / SAM / SOM, trends, geographies
+    - **CompetitorAnalysisAgent** — direct and indirect competitors
+    - **MVPGeneratorAgent** — feature list, KPIs, milestones, feasibility
+    - **MonetizationAgent** — revenue model and pricing tiers
+    - **GoToMarketAgent** — channels, communities, growth hacks
+
+    When all six complete, job progress advances to **89%**. A failure in any Phase 1 agent propagates immediately and marks the analysis as `FAILED`.
+  </Step>
+  <Step title="Phase 2 — Seven Synthesis Agents (parallel, partial failure allowed)">
+    Seven agents run concurrently via `Promise.allSettled`, each receiving the full Phase 1 result object as context. Progress starts at **90%** for this phase.
+
+    - **FinalReportAgent** — synthesized scored report (required)
+    - **RiskRadarAgent** — risk factors and mitigations
+    - **RoadmapAgent** — four-phase development plan
+    - **BusinessModelAgent** — 43-model pattern evaluation
+    - **VisionMissionAgent** — vision, mission, values, elevator pitch
+    - **BrandIdentityAgent** — names, palette, typography, brand story
+    - **BudgetEstimatorAgent** — cost breakdown and revenue projections
+
+    Failures in any agent except `FinalReportAgent` are logged as warnings; their fields are stored as `null`. A `FinalReportAgent` failure is fatal and marks the analysis as `FAILED`.
+  </Step>
+  <Step title="Grounding Evaluation and Application">
+    After Phase 2, the pipeline evaluates the quality of the `FinalReport` output — checking confidence scores, validation issues, and severity levels. A grounding strategy is then selected:
+
+    - **Rule-based grounding** — applies deterministic normalization rules to fix structural issues in the report
+    - **AI-based grounding** — sends the report back to the AI model with targeted repair instructions (subject to a per-analysis call limit and a feature flag)
+
+    Grounding effectiveness is tracked by comparing confidence and issue counts before and after, and the result is written to the structured AI event log.
+  </Step>
+  <Step title="ComprehensiveIdeaAnalyzer Runs Last">
+    After grounding, the `ComprehensiveIdeaAnalyzerAgent` executes synchronously with the Phase 1 context. It produces six scored dimensions (overall viability, market opportunity, competitive analysis, target audience fit, financial feasibility, risk assessment) plus prioritized recommendations. Job progress advances to **98%**.
+  </Step>
+  <Step title="Results Persisted and Status Set to COMPLETED">
+    All agent results are serialized to JSON and written to the `Analysis` record in a single Prisma `update` call. The five numeric score fields from `FinalReport` (`marketDemandScore`, `competitionScore`, `executionDifficultyScore`, `profitPotentialScore`, `overallScore`) are extracted to dedicated `Float` columns to support sorting and filtering without JSON parsing. Progress advances to **100%** and status is set to `COMPLETED`.
+  </Step>
+</Steps>
+
+## Polling for Progress
+
+While an analysis is in the `PENDING` or `PROCESSING` state, you can poll for real-time progress:
+
+```http
+GET /analysis/:id/progress
+```
+
+**Response while processing:**
+
+```json
+{
+  "status": "PROCESSING",
+  "progress": 89
+}
+```
+
+**Response when complete:**
+
+```json
+{
+  "status": "COMPLETED",
+  "progress": 100
+}
+```
+
+**Response on failure:**
+
+```json
+{
+  "status": "FAILED",
+  "progress": 0
+}
+```
+
+Progress values map to pipeline stages as follows:
+
+| Progress | Stage |
+|---|---|
+| 5% | Worker started, status set to PROCESSING |
+| 89% | Phase 1 (all 6 independent agents) complete |
+| 90% | Phase 2 agents launched |
+| 98% | Phase 2 complete, grounding applied, ComprehensiveIdeaAnalyzer running |
+| 100% | All results persisted, status COMPLETED |
+
+## Retrying a Failed Analysis
+
+If an analysis reaches the `FAILED` status, you can requeue it without creating a new record:
+
+```http
+POST /analysis/:id/retry
+```
+
+The analysis status is reset to `PENDING` and a new BullMQ job is created with a timestamp-suffixed job ID (`{analysisId}-retry-{timestamp}`) to prevent deduplication conflicts with the original failed job.
+
+```json
+{ "success": true }
+```
+
+## Per-Section Regeneration
+
+Any individual section can be regenerated in isolation without triggering a full pipeline re-run. This is useful when you want to explore a different monetization angle or refresh the risk radar after updating the idea.
+
+```http
+POST /analysis/:id/regenerate/:section
+```
+
+**Supported section slugs:**
+
+| Slug | Agent | Phase 1 Context Passed |
+|---|---|---|
+| `idea-analysis` | IdeaAnalyzerAgent | No |
+| `comprehensive-idea-analysis` | ComprehensiveIdeaAnalyzerAgent | No |
+| `market-research` | MarketResearchAgent | No |
+| `competitor-analysis` | CompetitorAnalysisAgent | No |
+| `mvp` | MVPGeneratorAgent | No |
+| `monetization` | MonetizationAgent | No |
+| `go-to-market` | GoToMarketAgent | No |
+| `risk-radar` | RiskRadarAgent | Yes |
+| `roadmap` | RoadmapAgent | Yes |
+| `business-model` | BusinessModelAgent | Yes |
+| `vision-mission` | VisionMissionAgent | Yes |
+| `brand-identity` | BrandIdentityAgent | Yes |
+| `budget` | BudgetEstimatorAgent | Yes |
+
+The service fetches only the fields required as context (ideaAnalysis, marketResearch, competitorAnalysis, mvpPlan, monetization, goToMarket), runs the appropriate agent, and writes the new result back to the database.
+
+**Example response:**
+
+```json
+{
+  "riskRadar": {
+    "risks": [
+      {
+        "id": 1,
+        "title": "Regulatory risk",
+        "description": "New data privacy regulations could restrict data collection.",
+        "probability": "medium",
+        "impact": "high",
+        "mitigation": "Engage a compliance consultant in Q1 and implement GDPR-compliant data flows."
+      }
+    ],
+    "overallRiskLevel": "medium",
+    "summary": "Moderate overall risk with primary exposure in regulatory and competitive dimensions."
+  }
+}
+```
+
+<Warning>
+  Regenerating a section overwrites the existing data for that field. The change is immediate and cannot be undone through the API. If you need to compare results, retrieve and save the current section before triggering regeneration.
+</Warning>

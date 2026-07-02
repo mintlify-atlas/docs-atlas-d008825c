@@ -1,0 +1,339 @@
+---
+title: "Auth Endpoints: Register, Login, OAuth"
+sidebarTitle: "Auth Endpoints"
+description: "REST endpoints for user registration, login, token refresh, logout, Google OAuth, and current user profile in AI Startup Analyzer."
+---
+
+The auth endpoints handle everything related to identity: creating accounts, issuing session cookies, renewing expired tokens, revoking sessions, authenticating through Google OAuth, and retrieving the currently signed-in user's profile. All auth routes live under the `/auth` prefix. For a detailed explanation of how cookies and CSRF tokens work together, see the [Authentication guide](/api-reference/authentication).
+
+---
+
+## POST /auth/register
+
+Creates a new user account and immediately issues session cookies. The response body contains the new user's `id` and `email`; the `accessToken` and `refreshToken` are delivered as httpOnly cookies — not in the response body.
+
+**Rate limits:** 5 requests per minute, 20 requests per hour.
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  A valid email address. Maximum 254 characters. Must be unique — attempting to register with an already-registered email returns `409 Conflict`.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's password. Must be between 10 and 128 characters and contain at least one uppercase letter, one lowercase letter, one digit, and one special character (`!@#$%^&*()_+-=[]{}` etc.).
+</ParamField>
+
+<ParamField body="name" type="string">
+  Optional display name for the user. Maximum 100 characters.
+</ParamField>
+
+### Response
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="string">
+      CUID unique identifier for the created user.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      The email address used to register.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+In addition to the JSON body, the server sets two httpOnly cookies: `accessToken` (7-day JWT) and `refreshToken` (30-day opaque token).
+
+### Errors
+
+| Status | Condition |
+|---|---|
+| `400 Bad Request` | Email is not valid, password does not meet requirements, or `name` exceeds 100 characters |
+| `409 Conflict` | An account with this email already exists |
+| `429 Too Many Requests` | Rate limit exceeded (5/min or 20/hr) |
+
+<CodeGroup>
+
+```bash curl
+curl -s -c cookies.txt \
+  -X POST http://localhost:4000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "founder@example.com",
+    "password": "Str0ng!Pass#99",
+    "name": "Alex Founder"
+  }'
+```
+
+```json 201 Response
+{
+  "user": {
+    "id": "clx4k7m2v0000abc123xyz789",
+    "email": "founder@example.com"
+  }
+}
+```
+
+```json 409 Response
+{
+  "statusCode": 409,
+  "message": "Email already in use"
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /auth/login
+
+Authenticates an existing user with email and password, and issues session cookies on success. The server checks the stored bcrypt hash; invalid credentials return `401` with no indication of which field was wrong.
+
+**Rate limits:** 10 requests per minute, 50 requests per hour.
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  The registered email address. Maximum 254 characters.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account password. Between 1 and 128 characters.
+</ParamField>
+
+### Response
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="string">
+      The user's CUID identifier.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      The authenticated user's email address.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+Sets `accessToken` (7-day JWT) and `refreshToken` (30-day) as httpOnly cookies.
+
+### Errors
+
+| Status | Condition |
+|---|---|
+| `401 Unauthorized` | Email not found or password is incorrect |
+| `429 Too Many Requests` | Rate limit exceeded (10/min or 50/hr) |
+
+<CodeGroup>
+
+```bash curl
+curl -s -c cookies.txt \
+  -X POST http://localhost:4000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "founder@example.com",
+    "password": "Str0ng!Pass#99"
+  }'
+```
+
+```json 200 Response
+{
+  "user": {
+    "id": "clx4k7m2v0000abc123xyz789",
+    "email": "founder@example.com"
+  }
+}
+```
+
+```json 401 Response
+{
+  "statusCode": 401,
+  "message": "Invalid credentials"
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /auth/refresh
+
+Exchanges a valid `refreshToken` for a new `accessToken` and `refreshToken` pair. The old refresh token is immediately invalidated in the database. Use this endpoint when an `accessToken` expires (protected endpoints return `401`) to restore the session without requiring the user to log in again.
+
+### Request Body
+
+<ParamField body="refreshToken" type="string" required>
+  The current refresh token string obtained from a previous login, register, or refresh response.
+</ParamField>
+
+### Response
+
+<ResponseField name="accessToken" type="string">
+  A new signed JWT for the access token cookie.
+</ResponseField>
+
+<ResponseField name="refreshToken" type="string">
+  A new opaque refresh token. Store this and discard the old one — the old token is now invalid.
+</ResponseField>
+
+### Errors
+
+| Status | Condition |
+|---|---|
+| `401 Unauthorized` | Token is invalid, already used, or has expired |
+
+<CodeGroup>
+
+```bash curl
+curl -s \
+  -X POST http://localhost:4000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refreshToken": "eyJhbGci...your-refresh-token"
+  }'
+```
+
+```json 200 Response
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJjbHg0azd...",
+  "refreshToken": "new-opaque-refresh-token-value"
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /auth/logout
+
+Invalidates the provided `refreshToken` in the database, ending the user's session. If the token provided is already invalid or not found, the endpoint still returns success — logout is idempotent.
+
+### Request Body
+
+<ParamField body="refreshToken" type="string" required>
+  The refresh token to revoke. After this call the token can no longer be used with `/auth/refresh`.
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Always `"Logged out"` on success.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl -s -b cookies.txt \
+  -X POST http://localhost:4000/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refreshToken": "your-refresh-token-value"
+  }'
+```
+
+```json 200 Response
+{
+  "message": "Logged out"
+}
+```
+
+</CodeGroup>
+
+<Note>
+  The server does not explicitly clear the `accessToken` or `refreshToken` cookies on logout. Browser clients should manually delete the cookies or rely on their natural expiry. The revoked refresh token ensures no new access tokens can be issued for that session.
+</Note>
+
+---
+
+## GET /auth/google
+
+Initiates the Google OAuth 2.0 authorization flow by redirecting the browser to Google's consent screen. This endpoint is intended to be opened directly in a browser tab — it is not an XHR/fetch call.
+
+There is no request body. The server redirects the browser using the configured `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables.
+
+### Prerequisites
+
+The following environment variables must be set on the backend:
+
+| Variable | Description |
+|---|---|
+| `GOOGLE_CLIENT_ID` | OAuth 2.0 Client ID from Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | OAuth 2.0 Client Secret from Google Cloud Console |
+
+### Usage
+
+```
+GET http://localhost:4000/auth/google
+```
+
+Navigate the user's browser to this URL. Google will display the account selection and consent screen. On approval, Google redirects to `/auth/google/callback`.
+
+---
+
+## GET /auth/google/callback
+
+The OAuth 2.0 redirect URI that Google calls after the user approves (or denies) consent. This endpoint is handled automatically as part of the OAuth flow — you do not call it directly.
+
+On success, the server:
+1. Finds or creates a user record matching the Google account's email.
+2. Signs a new JWT `accessToken` and creates a new `refreshToken`.
+3. Sets both as httpOnly cookies.
+4. Redirects the browser to `FRONTEND_URL/auth/callback` (defaults to `http://localhost:3000/auth/callback`).
+
+Your frontend `/auth/callback` page receives the session cookies automatically and can then call `GET /auth/me` to retrieve the user's profile.
+
+<Note>
+  The redirect destination is controlled by the `FRONTEND_URL` environment variable on the backend. Configure this to your deployed frontend URL in production.
+</Note>
+
+---
+
+## GET /auth/me
+
+Returns the currently authenticated user's profile. Requires a valid `accessToken` cookie.
+
+### Request
+
+No body. The JWT from the `accessToken` cookie is read automatically.
+
+### Response
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="string">
+      The authenticated user's CUID identifier.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      The authenticated user's email address.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Errors
+
+| Status | Condition |
+|---|---|
+| `401 Unauthorized` | No `accessToken` cookie present, or the JWT is expired / invalid |
+
+<CodeGroup>
+
+```bash curl
+curl -s -b cookies.txt \
+  http://localhost:4000/auth/me
+```
+
+```json 200 Response
+{
+  "user": {
+    "id": "clx4k7m2v0000abc123xyz789",
+    "email": "founder@example.com"
+  }
+}
+```
+
+```json 401 Response
+{
+  "statusCode": 401,
+  "message": "Unauthorized"
+}
+```
+
+</CodeGroup>

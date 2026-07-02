@@ -1,0 +1,224 @@
+---
+title: "Platform Architecture: How AI Startup Analyzer Works"
+sidebarTitle: "Architecture"
+description: "Explore the AI Startup Analyzer architecture: NestJS backend, Next.js frontend, BullMQ job queue, Redis cache, Prisma + PostgreSQL, and 14 parallel AI agents."
+---
+
+AI Startup Analyzer is built as a TypeScript monorepo that separates concerns across four workspaces: two deployable applications and two shared packages. The backend receives HTTP requests, enqueues analysis jobs, and runs 14 AI agents in two coordinated parallel phases. The frontend streams live progress from the queue and renders the completed report. Redis serves both the job queue and the AI response cache, while Prisma and Neon PostgreSQL form the durable data layer.
+
+## Repository Structure
+
+```text
+AI-Startup-Analyzer/
+├── apps/
+│   ├── backend/    # NestJS API + queue workers + AI agents
+│   └── frontend/   # Next.js web app
+├── packages/
+│   ├── db/         # Prisma schema + migrations
+│   └── shared/     # Shared TypeScript types and validation
+├── scripts/        # Housekeeping utilities
+├── docker-compose.yml
+└── docker-compose.prod.yml
+```
+
+Each workspace is a separate package within the pnpm workspace. Turborepo orchestrates the build graph so that `packages/db` and `packages/shared` are compiled before either application starts. The shared packages are referenced by their package names (`@ai-analyzer/db`, `@ai-analyzer/shared`) and resolved locally via workspace symlinks — no publishing step is required.
+
+## Request Lifecycle
+
+Every analysis follows the same end-to-end path from the HTTP layer through the queue and into the database.
+
+```
+Browser / curl
+  └─► POST /analysis  (NestJS AnalysisController)
+        └─► AnalysisService.create()  — persists record with status PENDING
+              └─► BullMQ "analysis" queue  — job enqueued
+                    └─► AnalysisProcessor.process()  — worker picks up job
+                          ├─► Phase 1: 6 core agents (Promise.all)
+                          ├─► Phase 2: 8 advanced agents (Promise.allSettled)
+                          ├─► Grounding pipeline (rule-based or AI-based)
+                          └─► prisma.analysis.update()  — status COMPLETED
+```
+
+The `AnalysisController` is protected by JWT authentication (httpOnly cookie), a CSRF middleware applied to all `/analysis` routes, and a global `ThrottlerGuard` capped at 10 requests per second and 100 requests per minute.
+
+## The Two-Phase Agent Execution Model
+
+The 14 agents are split into two phases based on their data dependencies. This design minimises total wall-clock time: agents within the same phase have no dependency on each other and can run fully concurrently.
+
+### Phase 1 — Six Core Agents (parallel)
+
+These agents receive only the raw idea string. They run with `Promise.all`, meaning all six must succeed before Phase 2 begins.
+
+```typescript
+const [ideaAnalysis, marketResearch, competitorAnalysis, mvpPlan, monetization, goToMarket] =
+  await Promise.all([
+    this.ideaAnalyzer.execute(idea),
+    this.marketResearch.execute(idea),
+    this.competitorAnalysis.execute(idea),
+    this.mvpGenerator.execute(idea),
+    this.monetization.execute(idea),
+    this.goToMarket.execute(idea),
+  ]);
+```
+
+| Agent | Primary Output Type |
+|---|---|
+| `IdeaAnalyzerAgent` | `IdeaAnalysis` |
+| `MarketResearchAgent` | `MarketResearch` |
+| `CompetitorAnalysisAgent` | `CompetitorAnalysis` |
+| `MVPGeneratorAgent` | `MVPPlan` |
+| `MonetizationAgent` | `MonetizationStrategy` |
+| `GoToMarketAgent` | `GoToMarketStrategy` |
+
+When Phase 1 completes, the job progress is updated to `89`. The combined `agentResults` object is passed as context to every Phase 2 agent.
+
+### Phase 2 — Eight Advanced Agents (parallel, fault-tolerant)
+
+These agents synthesize their output from both the original idea and the Phase 1 results. They run with `Promise.allSettled` so that a single agent failure does not abort the entire analysis.
+
+```typescript
+const [
+  finalReportResult,
+  riskRadarResult,
+  roadmapResult,
+  businessModelResult,
+  visionMissionResult,
+  brandIdentityResult,
+  budgetEstimateResult,
+] = await Promise.allSettled([
+  this.finalReport.execute(idea, agentResults),
+  this.riskRadar.execute(idea, agentResults),
+  this.roadmap.execute(idea, agentResults),
+  this.businessModel.execute(idea, agentResults),
+  this.visionMission.execute(idea, agentResults),
+  this.brandIdentity.execute(idea, agentResults),
+  this.budgetEstimator.execute(idea, agentResults),
+]);
+```
+
+After Phase 2 resolves, `ComprehensiveIdeaAnalyzerAgent` runs as a final single-agent step with full context from both phases.
+
+<Note>
+  Phase 2 uses `Promise.allSettled` — a rejected agent logs a warning and stores `null` for its section rather than failing the whole job. The only exception is `FinalReportAgent`: if it rejects, the processor throws and the job is marked `FAILED`, because the `IdeaScore` fields it produces are required for the top-level analysis record.
+</Note>
+
+## Grounding Pipeline
+
+After Phase 2, the `FinalReport` output passes through a quality evaluation and grounding pipeline before being written to the database.
+
+```
+FinalReport output
+  └─► evaluateFinalReportQuality()     — should grounding run?
+        └─► decideGroundingStrategy()  — rule-based or AI-based?
+              ├─► [rule] adaptiveGroundingTrigger()   — structural corrections
+              └─► [ai]   enhanceFinalReportWithAI()   — LLM re-enhancement
+                    └─► trackGroundingEffectiveness() — before/after delta log
+```
+
+Grounding is controlled by two feature flags in the environment:
+
+| Flag | Effect when `"true"` |
+|---|---|
+| `ENABLE_RULE_GROUNDING` | Applies deterministic structural corrections (field presence, score clamping, length checks) |
+| `ENABLE_AI_GROUNDING` | Passes the report back to the AI with grounding instructions to improve coherence and completeness |
+
+Both flags default to `"true"`. Set either to `"false"` to skip that grounding pass. When both are disabled, the raw `FinalReport` output is written to the database without modification.
+
+## Data Layer
+
+### Prisma + Neon PostgreSQL
+
+All persistent data is stored in a Neon PostgreSQL database managed through Prisma 6. The `packages/db` workspace contains the Prisma schema and all committed migrations. Two connection strings are required:
+
+- **`DATABASE_URL`** — the pooled Neon connection string used by the running application.
+- **`DIRECT_DATABASE_URL`** — the direct (non-pooled) connection string used exclusively by Prisma migrations.
+
+The backend container in production runs `prisma migrate deploy` as an entrypoint command before the API starts. If migrations fail, the container exits and serves no traffic.
+
+### Redis Cache
+
+Redis is used for two distinct purposes:
+
+1. **BullMQ job queue** — the `"analysis"` queue persists jobs, tracks progress, and handles retries. BullMQ uses ioredis under the hood and connects using the `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` environment variables.
+2. **AI response cache** — individual AI agent responses are cached with a 24-hour TTL. Cache keys are derived from a sha256 hash of the agent name and the input payload, so identical idea strings served within the TTL window do not incur additional AI API calls.
+
+## Security and Middleware
+
+The NestJS application bootstraps with the following security layers, all configured in `main.ts`:
+
+- **Helmet** — sets CSP, `X-Frame-Options`, HSTS, and other security headers on every response.
+- **Cookie Parser** — enables httpOnly cookie-based JWT authentication. Access tokens and refresh tokens are never exposed to JavaScript.
+- **CORS** — in production, only origins listed in `FRONTEND_URL` (comma-separated) are allowed. In development, all origins are permitted.
+- **CSRF Middleware** — applied to all `/analysis` routes via `CsrfMiddleware`.
+- **ValidationPipe** — strips undeclared properties (`whitelist: true`) and transforms payloads to their DTO types (`transform: true`).
+- **ThrottlerGuard** — global rate limiting at 10 req/s and 100 req/min via `@nestjs/throttler`.
+
+## Shared Packages
+
+### `@ai-analyzer/shared`
+
+The `packages/shared` workspace exports TypeScript types, validation helpers, and normalization utilities consumed by both the backend worker and (where applicable) the frontend. All exports are re-exported from a single entry point:
+
+```typescript
+// packages/shared/src/index.ts
+export * from './utils/wrapUserInput';
+export * from './validation/final-report';
+export * from './validation/comprehensive-idea-analysis';
+export * from './normalization/final-report';
+export type {
+  IdeaAnalysis,
+  MarketResearch,
+  Competitor,
+  CompetitorAnalysis,
+  MVPFeature,
+  MVPFeedbackLoop,
+  MVPKPI,
+  MVPFeasibilityItem,
+  MVPPlan,
+  MonetizationStrategy,
+  GoToMarketStrategy,
+  IdeaScore,
+  FinalReport,
+  ComprehensiveIdeaAnalysis,
+  AnalysisResult,
+} from './types/analysis.types';
+```
+
+The `validateFinalReportDetailed` and `normalizeFinalReport` functions from this package are used directly inside `AnalysisProcessor` to compute normalization confidence before and after the grounding pipeline runs.
+
+### `@ai-analyzer/db`
+
+The `packages/db` workspace contains the Prisma schema and migrations. It does not export application code — it is consumed at the infrastructure level via `pnpm db:generate`, `pnpm db:migrate:dev`, and `pnpm db:migrate:deploy`.
+
+## Module Structure (Backend)
+
+The NestJS application is composed of three feature modules registered in `AppModule`, plus a global health controller:
+
+```typescript
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    ThrottlerModule.forRoot([
+      { name: 'short', ttl: 1000,  limit: 10  },  // 10 req/sec
+      { name: 'long',  ttl: 60000, limit: 100 },   // 100 req/min
+    ]),
+    BullModule.forRoot({ connection: { host, port, password } }),
+    AuthModule,
+    AnalysisModule,
+    AgentsModule,
+  ],
+  controllers: [HealthController],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+})
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(CsrfMiddleware).forRoutes('analysis');
+  }
+}
+```
+
+| Module | Responsibilities |
+|---|---|
+| `AuthModule` | JWT strategy, refresh token rotation, Google OAuth, `/auth/*` routes |
+| `AnalysisModule` | Analysis CRUD, plan quota enforcement, BullMQ producer, `/analysis/*` routes |
+| `AgentsModule` | Provides all 14 agent services and `AIService` to the DI container |

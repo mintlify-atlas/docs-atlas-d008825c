@@ -1,0 +1,168 @@
+---
+title: "REST API Reference for AI Startup Analyzer"
+sidebarTitle: "Overview"
+description: "Complete REST API reference for AI Startup Analyzer. Base URL, authentication via JWT cookies, content type, error codes, and rate limiting summary."
+---
+
+The AI Startup Analyzer REST API gives you programmatic access to every capability in the platform — from registering users and managing sessions to creating multi-agent startup analyses, polling processing progress, regenerating individual report sections, and chatting with AI about your results. This reference covers every endpoint, its parameters, expected responses, and the security requirements you need to satisfy.
+
+## Base URL
+
+All API endpoints are served from a single origin. In local development the server binds to port `4000`:
+
+```
+http://localhost:4000
+```
+
+In staging or production, set the `BACKEND_URL` environment variable on your frontend or client application to override this default. The server port can also be changed via `BACKEND_PORT`.
+
+## Content Type
+
+Every request that includes a body must set the `Content-Type` header to `application/json`. Every successful response also returns `application/json`. There are no form-encoded or multipart endpoints.
+
+```http
+Content-Type: application/json
+Accept: application/json
+```
+
+## Authentication
+
+The API does **not** use `Authorization: Bearer` headers. Authentication is handled exclusively through **httpOnly cookies** that the server sets automatically on successful login or registration. Your HTTP client must persist and re-send these cookies on every subsequent request.
+
+- **`accessToken`** — A signed JWT valid for **7 days**. Sent with every protected request.
+- **`refreshToken`** — An opaque token valid for **30 days**, used to issue a new access token pair.
+
+For browser-based clients using `fetch` or `axios`, enable credential forwarding:
+
+```js
+// fetch
+fetch('http://localhost:4000/analysis', { credentials: 'include' });
+
+// axios
+axios.get('/analysis', { withCredentials: true });
+```
+
+For `curl` testing, use `-c` to save cookies and `-b` to send them:
+
+```bash
+curl -c cookies.txt http://localhost:4000/auth/login ...
+curl -b cookies.txt http://localhost:4000/analysis
+```
+
+See the [Authentication guide](/api-reference/authentication) for the full cookie and CSRF flow.
+
+## CSRF Protection
+
+State-changing requests to `/analysis` routes (POST and DELETE) require a valid **CSRF token** in addition to the auth cookie. Fetch the token first, then include it as an `X-XSRF-TOKEN` header.
+
+See [Authentication — CSRF flow](/api-reference/authentication#csrf-protection) for details.
+
+## Error Codes
+
+The API returns standard HTTP status codes. Error responses include a JSON body with a `message` field (and sometimes a `statusCode` field) describing the problem.
+
+| Status Code | Meaning |
+|---|---|
+| `400 Bad Request` | Missing or invalid request body / query parameters |
+| `401 Unauthorized` | Missing, expired, or invalid access token cookie |
+| `403 Forbidden` | Authenticated but not permitted to access the resource |
+| `404 Not Found` | Resource does not exist or does not belong to the authenticated user |
+| `409 Conflict` | Monthly analysis limit reached for your current plan |
+| `429 Too Many Requests` | Rate limit exceeded — back off and retry |
+| `500 Internal Server Error` | Unexpected server error |
+
+```json
+{
+  "statusCode": 409,
+  "message": "Monthly limit reached (3 for FREE plan)."
+}
+```
+
+## Rate Limits
+
+Certain endpoints are rate-limited at two timescales to prevent abuse. The server returns `429 Too Many Requests` when a limit is exceeded.
+
+| Endpoint | Per Minute | Per Hour |
+|---|---|---|
+| `POST /auth/register` | 5 requests | 20 requests |
+| `POST /auth/login` | 10 requests | 50 requests |
+| `POST /analysis/chat` | 10 requests / 60 s | — |
+
+## Quick Start: Full Flow Example
+
+The following `curl` sequence demonstrates a complete end-to-end flow — register a new account, obtain a CSRF token, submit a startup idea for analysis, and poll for completion.
+
+<CodeGroup>
+
+```bash Register & capture cookies
+curl -s -c cookies.txt \
+  -X POST http://localhost:4000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "founder@example.com",
+    "password": "Str0ng!Pass#99",
+    "name": "Alex Founder"
+  }'
+# Response: { "user": { "id": "clx...", "email": "founder@example.com" } }
+# Cookies saved: accessToken, refreshToken
+```
+
+```bash Get CSRF token
+curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token
+# Response: { "csrfToken": "a3f8...d912" }
+# Cookie set: XSRF-TOKEN (readable by JS)
+```
+
+```bash Create analysis
+curl -s -b cookies.txt -c cookies.txt \
+  -X POST http://localhost:4000/analysis \
+  -H "Content-Type: application/json" \
+  -H "X-XSRF-TOKEN: a3f8...d912" \
+  -d '{
+    "idea": "An AI-powered tool that analyzes startup ideas and generates comprehensive business reports across 13 dimensions including market research, competitor analysis, and financial projections."
+  }'
+# Response: { "id": "clx_abc123", "status": "PENDING", ... }
+```
+
+```bash Poll progress
+curl -s -b cookies.txt \
+  http://localhost:4000/analysis/clx_abc123/progress
+# Response: { "status": "PROCESSING", "progress": 45 }
+# Repeat until status is "COMPLETED" or "FAILED"
+```
+
+</CodeGroup>
+
+## API Sections
+
+<CardGroup cols={2}>
+  <Card
+    title="Auth Endpoints"
+    icon="lock"
+    href="/api-reference/auth"
+  >
+    Register, login, logout, token refresh, Google OAuth, and current user profile.
+  </Card>
+  <Card
+    title="Analysis Endpoints"
+    icon="chart-line"
+    href="/api-reference/analysis"
+  >
+    Create analyses, poll progress, retrieve reports, regenerate sections, chat with AI, and manage plan usage.
+  </Card>
+  <Card
+    title="Authentication Guide"
+    icon="key"
+    href="/api-reference/authentication"
+  >
+    Deep dive into cookie-based JWT auth, the CSRF double-submit pattern, and token refresh flow.
+  </Card>
+  <Card
+    title="Health Check"
+    icon="heart-pulse"
+    href="/api-reference/health"
+  >
+    Server liveness endpoint for load balancers, container probes, and uptime monitors.
+  </Card>
+</CardGroup>

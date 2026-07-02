@@ -1,0 +1,78 @@
+---
+title: "AI Startup Analyzer: Multi-Agent Startup Idea Analysis Platform"
+sidebarTitle: "Introduction"
+description: "AI Startup Analyzer uses 14 parallel AI agents to turn any startup idea into a detailed report covering market, competition, MVP, monetization, and more."
+---
+
+AI Startup Analyzer is a full-stack SaaS platform that transforms a single startup idea into a comprehensive, multi-section analysis report. Instead of spending weeks on manual research, founders and product teams submit a one-sentence idea and receive scored insights across market demand, competition, execution risk, MVP planning, monetization models, go-to-market strategy, brand identity, budget estimates, and more — all generated in a single automated pipeline by 14 specialized AI agents running in parallel.
+
+## The Problem It Solves
+
+Early-stage founders routinely make avoidable mistakes: building products nobody wants, underestimating competition, pricing incorrectly, or targeting the wrong audience. Traditional market research is time-consuming and expensive. AI Startup Analyzer compresses that process from weeks to minutes by dispatching a coordinated fleet of AI agents — each responsible for one analytical domain — and synthesizing their outputs into a single final report with numerical scores.
+
+## The 14 AI Agents
+
+Every analysis triggers all 14 agents. The first six run concurrently on the raw idea; the remaining eight run concurrently once those results are available, using the Phase 1 outputs as grounding context.
+
+| Agent | What It Produces |
+|---|---|
+| **IdeaAnalyzerAgent** | Idea summary, core problem statement, target users, industry classification, and use cases |
+| **MarketResearchAgent** | Market demand assessment, TAM/SAM/SOM sizing, growth trends, and geographic opportunities |
+| **CompetitorAnalysisAgent** | Direct and indirect competitor profiles with strengths, weaknesses, and pricing data |
+| **MVPGeneratorAgent** | Product name, tagline, prioritized feature list (Must Have / Should Have / Nice to Have), KPIs, feedback loops, and feasibility checks |
+| **MonetizationAgent** | Recommended revenue model (subscription, freemium, usage-based, or enterprise) with pricing tier suggestions |
+| **GoToMarketAgent** | Marketing channels, target communities, partnership opportunities, and growth hacks |
+| **FinalReportAgent** | Synthesized prose report covering all domains plus a five-dimensional `IdeaScore` (market demand, competition, execution difficulty, profit potential, overall) |
+| **RiskRadarAgent** | Risk factors, severity assessments, and mitigation strategies |
+| **RoadmapAgent** | Phased development roadmap with milestones and delivery timelines |
+| **BusinessModelAgent** | Business model canvas, revenue streams, cost structure, and key partnerships |
+| **VisionMissionAgent** | Vision statement, mission statement, and core values aligned to the idea |
+| **BrandIdentityAgent** | Brand positioning, tone of voice, naming suggestions, and visual identity direction |
+| **BudgetEstimatorAgent** | Estimated development costs, operational costs, and runway projections |
+| **ComprehensiveIdeaAnalyzerAgent** | Holistic viability scoring across six sub-dimensions (market opportunity, competitive analysis, audience fit, financial feasibility, risk assessment, and recommendations) |
+
+<Note>
+  You need at least one AI API key to run any analysis. AI Startup Analyzer supports **Google Gemini 2.0 Flash** (via `GEMINI_API_KEY`) and any model available through **OpenRouter** (via `OPENROUTER_API_KEY`). Both keys can be set simultaneously; the platform selects the appropriate provider per agent.
+</Note>
+
+## Tech Stack
+
+AI Startup Analyzer is a TypeScript monorepo managed with **pnpm 10** and **Turborepo**. The core layers are:
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts |
+| Backend | NestJS 10, TypeScript, Passport JWT + Google OAuth |
+| Queue | BullMQ 5 + ioredis |
+| Database | Prisma 6 + Neon PostgreSQL |
+| Cache | Redis 7 (24-hour TTL on AI responses, sha256-keyed) |
+| AI Providers | Google Gemini 2.0 Flash, OpenRouter |
+| CI/CD | GitHub Actions |
+| Deployment | Docker Compose, Netlify |
+
+## Plan Tiers
+
+Access to the platform is gated by three subscription plans that control how many analyses a user can run per month.
+
+| Plan | Analyses / Month | Best For |
+|---|---|---|
+| **FREE** | 3 | Hobbyists and first-time evaluations |
+| **PRO** | 50 | Active founders running regular experiments |
+| **TEAM** | Unlimited | Accelerators, agencies, and power users |
+
+## Explore the Docs
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Clone the repo, configure environment variables, and run your first analysis in under 10 minutes.
+  </Card>
+  <Card title="Architecture" icon="layer-group" href="/architecture">
+    Deep dive into the two-phase agent execution model, BullMQ job queue, Redis caching, and Prisma data layer.
+  </Card>
+  <Card title="AI Agents" icon="robot" href="/features/ai-agents">
+    Detailed reference for every agent's input schema, output type, and role in the analysis pipeline.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Full REST API reference for authentication, analysis submission, progress polling, and section regeneration.
+  </Card>
+</CardGroup>

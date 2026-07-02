@@ -1,0 +1,169 @@
+---
+title: "Environment Variables Reference for AI Startup Analyzer"
+sidebarTitle: "Environment Variables"
+description: "Complete reference for all environment variables in AI Startup Analyzer. Covers database, Redis, AI providers, JWT, OAuth, grounding flags, and app settings."
+---
+
+AI Startup Analyzer is configured entirely through environment variables. Copy `.env.example` to `.env` at the repository root and fill in values before starting the backend. The frontend uses a separate `apps/frontend/.env.local` file with a single variable. The sections below document every variable, note which ones are required, and explain the effect each one has at runtime.
+
+## Database
+
+AI Startup Analyzer uses [Neon](https://neon.tech) Postgres. Neon provides two connection strings per branch: a **pooled** string routed through PgBouncer that the running application uses for all queries, and a **direct** string that bypasses the pooler for operations that require a persistent connection — most importantly, Prisma migrations.
+
+<ParamField path="DATABASE_URL" type="string" required>
+  Pooled Neon connection string used by the running application for all database
+  queries. Must include `?sslmode=require`. Example:
+  ```
+  postgresql://neondb_owner:<password>@ep-<pooled-endpoint>-pooler.<region>.aws.neon.tech/neondb?sslmode=require
+  ```
+  The URL must point to the **pooler** endpoint (hostname contains `-pooler`).
+  Using the direct endpoint here will exhaust connection limits under load.
+</ParamField>
+
+<ParamField path="DIRECT_DATABASE_URL" type="string" required>
+  Direct (non-pooled) Neon connection string used exclusively by Prisma
+  migrations (`prisma migrate deploy` / `prisma migrate dev`). Example:
+  ```
+  postgresql://neondb_owner:<password>@ep-<direct-endpoint>.<region>.aws.neon.tech/neondb?sslmode=require
+  ```
+  This variable is read only during schema migration commands. The running
+  application never uses it for live traffic.
+</ParamField>
+
+## Redis
+
+Redis is used for two purposes: BullMQ job queues that distribute analysis work to background workers, and an in-process response cache in `AIService` that stores AI-generated text for 24 hours to avoid redundant API calls. Both consumers connect using the same `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` values.
+
+<ParamField path="REDIS_HOST" type="string">
+  Hostname of the Redis server. Defaults to `localhost` when not set. For
+  managed services such as Upstash, the `AIService` automatically enables TLS
+  when the hostname contains `upstash`.
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="string">
+  TCP port the Redis server listens on. Defaults to `6379` when not set.
+</ParamField>
+
+<ParamField path="REDIS_PASSWORD" type="string">
+  Password for Redis authentication. Leave empty for local development instances
+  running without authentication. Required in production — any deployment using
+  Redis without a password is an open cache.
+
+  <Warning>
+    Set `REDIS_PASSWORD` to a strong random value for every non-local
+    environment. Redis is accessible to all processes that can reach the host
+    and port; an unauthenticated Redis instance exposes all cached AI responses
+    and the BullMQ job queue.
+  </Warning>
+</ParamField>
+
+## AI Providers
+
+At least one AI provider key must be set for the analysis pipeline to run. `AIService` checks for `OPENROUTER_API_KEY` first; if that key is present and not the placeholder value it calls OpenRouter (defaulting to `openai/gpt-4o-mini`). If only `GEMINI_API_KEY` is set, all generation goes through Google Gemini 2.0 Flash. Both keys may be set simultaneously — OpenRouter always wins in that case.
+
+<ParamField path="GEMINI_API_KEY" type="string">
+  API key for the [Google AI Studio](https://aistudio.google.com/) Gemini API.
+  The service uses the `gemini-2.0-flash` model. Required when
+  `OPENROUTER_API_KEY` is not set. The placeholder value
+  `your-gemini-api-key` is treated as absent by the service.
+</ParamField>
+
+<ParamField path="OPENROUTER_API_KEY" type="string">
+  API key for [OpenRouter](https://openrouter.ai/). When present and valid, this
+  provider takes priority over Gemini. The default model is
+  `openai/gpt-4o-mini` with a 4 000-token response limit. The placeholder
+  value `your-openrouter-api-key` is treated as absent by the service.
+</ParamField>
+
+## Authentication
+
+<Warning>
+  `JWT_SECRET` **must** be replaced with a strong, randomly generated value
+  before deploying to any shared or production environment. The placeholder
+  value `your-super-secret-jwt-key-change-in-production` is intentionally weak
+  and must never be used in production. Generate a secret with
+  `openssl rand -base64 64` and store it securely.
+</Warning>
+
+<ParamField path="JWT_SECRET" type="string" required>
+  Secret key used to sign and verify JSON Web Tokens for session authentication.
+  Must be a long, random string. All existing tokens are invalidated when this
+  value changes, so treat it as a permanent production secret.
+</ParamField>
+
+<ParamField path="JWT_EXPIRES_IN" type="string">
+  Expiry duration for issued JWTs in [ms](https://github.com/vercel/ms) format.
+  Defaults to `7d` (seven days). Use shorter values such as `1d` for
+  higher-security deployments.
+</ParamField>
+
+<ParamField path="GOOGLE_CLIENT_ID" type="string">
+  OAuth 2.0 client ID from the [Google Cloud Console](https://console.cloud.google.com/).
+  Required only when Google OAuth login is enabled. Leave empty to disable the
+  `/auth/google` endpoint.
+</ParamField>
+
+<ParamField path="GOOGLE_CLIENT_SECRET" type="string">
+  OAuth 2.0 client secret corresponding to `GOOGLE_CLIENT_ID`. Keep this value
+  private; it must never be exposed to browser clients.
+</ParamField>
+
+<ParamField path="GOOGLE_CALLBACK_URL" type="string">
+  Full URL that Google redirects to after OAuth consent. Must match an
+  **Authorized redirect URI** configured in the Google Cloud Console exactly.
+  Default: `http://localhost:4000/auth/google/callback`.
+</ParamField>
+
+## Grounding
+
+Grounding is the quality assurance layer applied to the final report after initial generation. Two independent strategies exist: a fast, deterministic rule-based pass and a heavier AI-assisted pass. Each is controlled by its own flag so you can disable AI grounding to reduce API quota consumption without disabling structural normalization.
+
+<ParamField path="ENABLE_AI_GROUNDING" type="string">
+  Set to `"false"` to disable AI-based grounding. Any value other than
+  `"false"` — including absent — is treated as enabled (default: `true`). When
+  enabled and the quality evaluator detects low confidence or too many issues
+  in the generated report, the system sends a targeted re-generation prompt for
+  the weak sections only, up to one AI call per analysis request.
+</ParamField>
+
+<ParamField path="ENABLE_RULE_GROUNDING" type="string">
+  Set to `"false"` to disable rule-based grounding. Any value other than
+  `"false"` — including absent — is treated as enabled (default: `true`). When
+  enabled, deterministic normalization fixes are applied to the report (whitespace
+  normalization, duplicate risk de-duplication, score clamping to the 0–10 range)
+  without making any additional AI calls.
+</ParamField>
+
+## Application
+
+<ParamField path="NODE_ENV" type="string">
+  Runtime environment. Accepted values are `development`, `test`, and
+  `production`. Affects NestJS logging verbosity and exception filter behaviour.
+  Default: `development`.
+</ParamField>
+
+<ParamField path="BACKEND_PORT" type="string">
+  TCP port the NestJS HTTP server listens on. Default: `4000`.
+</ParamField>
+
+<ParamField path="FRONTEND_URL" type="string">
+  Full base URL of the frontend application. Used by the backend for CORS
+  configuration and OAuth redirect validation. Default: `http://localhost:3000`.
+  Must be set to the public frontend URL in production.
+</ParamField>
+
+<ParamField path="BACKEND_URL" type="string">
+  Full base URL of the backend API. Used internally for self-referential links
+  and health checks. Default: `http://localhost:4000`.
+</ParamField>
+
+## Frontend
+
+The frontend reads a single environment variable from `apps/frontend/.env.local`.
+
+<ParamField path="NEXT_PUBLIC_API_URL" type="string" required>
+  Base URL that the Next.js frontend uses for all API requests. Must point to
+  the running backend. Default: `http://localhost:4000`. For Netlify deployments,
+  set this in the site's environment variable settings to the production backend
+  URL.
+</ParamField>

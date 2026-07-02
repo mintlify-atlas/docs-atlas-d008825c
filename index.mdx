@@ -1,20 +1,105 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "AI Startup Analyzer: AI-Powered Startup Idea Analysis"
+sidebarTitle: "Home"
+description: "Submit a startup idea and get a comprehensive report from 14 specialized AI agents covering market research, MVP planning, monetization, go-to-market strategy, and more."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+AI Startup Analyzer is a full-stack SaaS platform that evaluates startup ideas using a pipeline of 14 specialized AI agents. Submit any idea and receive a detailed multi-section report with scores, market insights, competitor analysis, MVP recommendations, and go-to-market strategies — all generated in parallel and delivered in minutes.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get the platform running locally in under 10 minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand the agent pipeline, queue system, and data flow
+  </Card>
+  <Card title="AI Agents" icon="robot" href="/features/ai-agents">
+    Explore all 14 specialized agents and what they produce
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/overview">
+    Integrate with the REST API from your own applications
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What You Get From Every Analysis
+
+Each analysis submission triggers a full pipeline run across 14 AI agents, producing:
+
+<CardGroup cols={3}>
+  <Card title="Idea Validation" icon="lightbulb">
+    Problem statement, target users, industry classification, and use cases
+  </Card>
+  <Card title="Market Research" icon="chart-line">
+    TAM/SAM/SOM sizing, growth trends, and geographic opportunities
+  </Card>
+  <Card title="Competitor Analysis" icon="users">
+    Direct and indirect competitors with strengths, weaknesses, and pricing
+  </Card>
+  <Card title="MVP Plan" icon="code-branch">
+    Prioritized features, KPIs, feedback loops, and feasibility assessment
+  </Card>
+  <Card title="Monetization Strategy" icon="dollar-sign">
+    Recommended model (subscription, freemium, usage-based, enterprise) with pricing tiers
+  </Card>
+  <Card title="Go-to-Market" icon="bullhorn">
+    Marketing channels, communities, partnerships, and growth hacks
+  </Card>
+  <Card title="Risk Radar" icon="triangle-exclamation">
+    Risk factors, mitigation strategies, and probability of success
+  </Card>
+  <Card title="Roadmap" icon="map">
+    Phase-by-phase development and launch plan
+  </Card>
+  <Card title="Business Model" icon="building">
+    Revenue streams, cost structure, and key activities
+  </Card>
+  <Card title="Vision & Mission" icon="star">
+    Brand narrative, vision statement, and mission definition
+  </Card>
+  <Card title="Brand Identity" icon="palette">
+    Naming suggestions, positioning, and visual identity direction
+  </Card>
+  <Card title="Budget Estimate" icon="calculator">
+    Development costs, operational expenses, and financial runway
+  </Card>
+</CardGroup>
+
+## Get Started in 4 Steps
+
+<Steps>
+  <Step title="Install dependencies">
+    Clone the repo and install with pnpm across the monorepo.
+
+    ```bash
+    pnpm install
+    ```
+  </Step>
+  <Step title="Configure environment">
+    Copy the example environment file and add your AI API keys and database connection.
+
+    ```bash
+    cp .env.example .env
+    ```
+  </Step>
+  <Step title="Start Redis and run migrations">
+    Start a Redis container for the job queue, then apply Prisma migrations.
+
+    ```bash
+    docker run --name ai-analyzer-redis -p 6379:6379 -d redis:7-alpine
+    pnpm db:generate && pnpm db:migrate:deploy
+    ```
+  </Step>
+  <Step title="Launch the platform">
+    Start both the frontend and backend in development mode.
+
+    ```bash
+    pnpm dev
+    ```
+
+    The frontend runs at `http://localhost:3000` and the backend API at `http://localhost:4000`.
+  </Step>
+</Steps>
+
+<Note>
+  You need at least one AI API key to run analyses. Set either `GEMINI_API_KEY` (Google Gemini 2.0 Flash) or `OPENROUTER_API_KEY` in your `.env` file. See [AI Providers](/configuration/ai-providers) for details.
+</Note>

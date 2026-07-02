@@ -1,0 +1,119 @@
+{
+  "projectType": "saas",
+  "projectName": "AI Startup Analyzer",
+  "projectDescription": "A full-stack SaaS platform that uses 14 specialized AI agents to analyze startup ideas and generate comprehensive reports covering market research, competitor analysis, MVP planning, monetization, go-to-market strategy, risk assessment, roadmap, business model, brand identity, and budget estimates.",
+  "theme": "luma",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4338ca",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/ai-providers",
+              "configuration/grounding"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/netlify",
+              "deployment/database"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/ai-agents",
+              "features/analysis-pipeline",
+              "features/authentication",
+              "features/plans-and-limits"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api-reference/auth",
+              "api-reference/analysis",
+              "api-reference/health"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "14 specialized AI agents running in parallel for comprehensive startup analysis",
+    "Multi-provider AI support: Google Gemini 2.0 Flash and OpenRouter",
+    "Asynchronous job processing with BullMQ + Redis for reliable queue management",
+    "JWT + Google OAuth authentication with refresh token rotation",
+    "Per-section report regeneration for targeted updates",
+    "AI and rule-based grounding for final report quality assurance",
+    "Usage-based plan limits (FREE: 3/month, PRO: 50/month, TEAM: unlimited)",
+    "Monorepo with shared TypeScript types, validation, and normalization packages",
+    "Docker Compose setup for local development and production deployment",
+    "Redis-backed AI response caching (24-hour TTL)"
+  ],
+  "publicApiSurface": [
+    "POST /auth/register",
+    "POST /auth/login",
+    "POST /auth/refresh",
+    "POST /auth/logout",
+    "GET /auth/google",
+    "GET /auth/google/callback",
+    "GET /auth/me",
+    "POST /analysis",
+    "GET /analysis",
+    "GET /analysis/:id",
+    "GET /analysis/:id/progress",
+    "DELETE /analysis/:id",
+    "POST /analysis/:id/retry",
+    "POST /analysis/:id/regenerate/:section",
+    "POST /analysis/chat",
+    "GET /analysis/csrf-token",
+    "GET /analysis/me/plan",
+    "GET /health",
+    "IdeaAnalyzerAgent",
+    "ComprehensiveIdeaAnalyzerAgent",
+    "MarketResearchAgent",
+    "CompetitorAnalysisAgent",
+    "MVPGeneratorAgent",
+    "MonetizationAgent",
+    "GoToMarketAgent",
+    "FinalReportAgent",
+    "RiskRadarAgent",
+    "RoadmapAgent",
+    "BusinessModelAgent",
+    "VisionMissionAgent",
+    "BrandIdentityAgent",
+    "BudgetEstimatorAgent",
+    "AIService.generate(prompt)",
+    "AIService.parseJSON(text)"
+  ]
+}

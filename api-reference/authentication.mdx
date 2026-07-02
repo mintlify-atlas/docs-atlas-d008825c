@@ -1,0 +1,169 @@
+---
+title: "Authenticating API Requests"
+sidebarTitle: "Authentication"
+description: "How to authenticate with the AI Startup Analyzer API using JWT cookies, refresh tokens, and CSRF protection for state-changing requests."
+---
+
+The AI Startup Analyzer API does not use `Authorization` headers or API keys. Instead, it relies on **httpOnly cookie-based JWT authentication** — a pattern that is both more secure against XSS attacks and simpler to use in browser-based applications. This page explains exactly how cookies are issued, how to send them with every request, how to renew an expired access token, and how to satisfy the CSRF requirement on state-changing calls.
+
+## How Cookie Auth Works
+
+When you call `POST /auth/login` or `POST /auth/register` successfully, the server sets two cookies on the response:
+
+| Cookie | Value | Lifetime | Flags |
+|---|---|---|---|
+| `accessToken` | Signed JWT containing `userId` and `email` | 7 days | `HttpOnly`, `SameSite=Lax` (dev) / `Strict` (prod), `Secure` (prod only) |
+| `refreshToken` | Opaque token stored in database | 30 days | `HttpOnly`, `SameSite=Lax` (dev) / `Strict` (prod), `Secure` (prod only) |
+
+Because both cookies are `HttpOnly`, JavaScript running on the page cannot read them — they are automatically attached to every same-origin request by the browser. This eliminates the risk of token theft via XSS.
+
+<Note>
+  The `accessToken` cookie is what the server reads to authenticate protected endpoints. You never need to extract the JWT value manually — the browser (or `curl`) handles forwarding it.
+</Note>
+
+## Browser Clients
+
+For browser-based clients (React, Next.js, etc.) you must explicitly opt in to sending cookies on cross-origin requests. The API server has CORS configured with `credentials: true`, so you just need to enable it on the client side.
+
+<CodeGroup>
+
+```js fetch API
+const response = await fetch('http://localhost:4000/analysis', {
+  method: 'GET',
+  credentials: 'include', // <-- required
+});
+```
+
+```js axios
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: 'http://localhost:4000',
+  withCredentials: true, // <-- required
+});
+
+const { data } = await api.get('/analysis');
+```
+
+</CodeGroup>
+
+## curl Testing
+
+When testing with `curl`, use `-c` to write cookies to a file after login, and `-b` to send them on subsequent requests:
+
+```bash
+# Save cookies after login
+curl -c cookies.txt -X POST http://localhost:4000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "founder@example.com", "password": "Str0ng!Pass#99"}'
+
+# Use saved cookies on a protected route
+curl -b cookies.txt http://localhost:4000/analysis
+```
+
+## CSRF Protection
+
+All `POST` and `DELETE` requests to `/analysis` routes require a **CSRF token** in addition to the auth cookie. The server implements the [Double Submit Cookie](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html#double-submit-cookie) pattern:
+
+1. **Fetch the token** — call `GET /analysis/csrf-token`. The server generates a cryptographically random 32-byte hex token, sets it as a **non-httpOnly** `XSRF-TOKEN` cookie (so JavaScript can read it), and also returns it in the response body.
+2. **Include the token** — on every subsequent state-changing request to `/analysis`, read the `XSRF-TOKEN` cookie value and send it in the `X-XSRF-TOKEN` request header.
+3. **Server validates** — the server compares the header value against the cookie value. A cross-origin attacker cannot read the cookie and therefore cannot forge the header.
+
+<Warning>
+  Skipping the CSRF token on a `POST /analysis` or `DELETE /analysis/:id` call will result in a `403 Forbidden` response. Always fetch a fresh token before making your first state-changing request in a session.
+</Warning>
+
+<CodeGroup>
+
+```bash curl — get CSRF token
+# Note: -c saves updated cookies (including XSRF-TOKEN), -b sends existing auth cookies
+curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token
+# Response:
+# { "csrfToken": "a3f87c2d1e4b5f6a8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1" }
+```
+
+```bash curl — use CSRF token in POST
+# Extract the token from the response, then pass it as X-XSRF-TOKEN
+CSRF_TOKEN=$(curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token | jq -r '.csrfToken')
+
+curl -s -b cookies.txt -c cookies.txt \
+  -X POST http://localhost:4000/analysis \
+  -H "Content-Type: application/json" \
+  -H "X-XSRF-TOKEN: $CSRF_TOKEN" \
+  -d '{"idea": "A SaaS platform that automates competitor tracking using AI web scrapers and sends weekly digest emails to product teams."}'
+```
+
+```js JavaScript (fetch)
+// Step 1: get CSRF token
+const { csrfToken } = await fetch('http://localhost:4000/analysis/csrf-token', {
+  credentials: 'include',
+}).then(r => r.json());
+
+// Step 2: use it in the POST header
+const analysis = await fetch('http://localhost:4000/analysis', {
+  method: 'POST',
+  credentials: 'include',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-XSRF-TOKEN': csrfToken,
+  },
+  body: JSON.stringify({
+    idea: 'A SaaS platform that automates competitor tracking using AI web scrapers and sends weekly digest emails to product teams.',
+  }),
+}).then(r => r.json());
+```
+
+</CodeGroup>
+
+## Token Refresh Flow
+
+The `accessToken` cookie is valid for 7 days. When it expires, requests to protected endpoints return `401 Unauthorized`. At that point, exchange the `refreshToken` for a new token pair by calling `POST /auth/refresh`.
+
+<Note>
+  The `refreshToken` is stored as an httpOnly cookie, so you cannot read it directly in the browser. When calling `/auth/refresh`, pass the value you received in the original login/register JSON response body — or store it securely (e.g. in secure storage for native apps).
+</Note>
+
+<CodeGroup>
+
+```bash curl — refresh tokens
+curl -s -b cookies.txt -c cookies.txt \
+  -X POST http://localhost:4000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "your-refresh-token-value"}'
+# Response:
+# {
+#   "accessToken": "eyJhbGci...",
+#   "refreshToken": "new-refresh-token-value"
+# }
+```
+
+```js JavaScript (axios)
+const { data } = await api.post('/auth/refresh', {
+  refreshToken: storedRefreshToken,
+});
+// data.accessToken and data.refreshToken are the new token pair
+// Update your stored refreshToken for the next refresh cycle
+storedRefreshToken = data.refreshToken;
+```
+
+</CodeGroup>
+
+The refresh endpoint returns a new `accessToken` and a new `refreshToken` in the JSON body. The old refresh token is invalidated in the database. Store the new refresh token for the next renewal cycle.
+
+<Warning>
+  Refresh tokens are single-use and expire after 30 days. If a refresh token has already been used or is expired, the endpoint returns `401 Unauthorized` and the user must log in again.
+</Warning>
+
+## Logout
+
+Calling `POST /auth/logout` with the current `refreshToken` invalidates it in the database. The auth cookies are not automatically cleared by the server on logout (they will naturally expire), so for client-side cleanup you should also delete the `accessToken` and `refreshToken` cookies from the browser if your SameSite policy allows it.
+
+```bash
+curl -s -b cookies.txt \
+  -X POST http://localhost:4000/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "your-refresh-token-value"}'
+# Response: { "message": "Logged out" }
+```

@@ -1,47 +1,226 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with AI Startup Analyzer"
+sidebarTitle: "Quickstart"
+description: "Set up AI Startup Analyzer locally in under 10 minutes. Install dependencies, configure environment variables, start Redis, and run your first analysis."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through running AI Startup Analyzer on your local machine from a fresh clone to submitting a real analysis. All commands assume you are in the repository root unless noted otherwise.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Check Prerequisites">
+    Before you begin, make sure the following are available on your machine.
+
+    | Requirement | Minimum Version | Notes |
+    |---|---|---|
+    | Node.js | 20+ | Required by both apps and all packages |
+    | pnpm | 10+ | The only supported package manager in this repo |
+    | Redis | 7+ | Used by BullMQ for the job queue and by the AI response cache |
+    | AI API key | — | Gemini 2.0 Flash or any OpenRouter model |
+
+    <Tip>
+      If you do not have Redis installed locally, Step 4 shows how to start it with a single Docker command — no local installation needed.
+    </Tip>
+  </Step>
+
+  <Step title="Clone and Install Dependencies">
+    Clone the repository and install all workspace dependencies with pnpm. Turborepo will handle the build graph automatically.
+
+    <CodeGroup>
+      ```bash pnpm
+      git clone https://github.com/Abbaddii-99/AI-Startup-Analyzer.git
+      cd AI-Startup-Analyzer
+      pnpm install
+      ```
+
+      ```bash npm (not supported)
+      # This monorepo uses pnpm workspaces.
+      # npm and yarn are not supported — use pnpm 10+.
+      ```
+    </CodeGroup>
+
+    <Note>
+      `pnpm install` installs dependencies for all three workspaces — `apps/backend`, `apps/frontend`, and every package under `packages/` — in a single pass.
+    </Note>
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Copy the example environment file and fill in the required values.
 
     ```bash
-    npm install your-package
+    cp .env.example .env
     ```
+
+    Open `.env` and set these variables at minimum:
+
+    ```env
+    # ── Database (Neon PostgreSQL) ─────────────────────────────────────────────
+    # Pooled connection string for the running app
+    DATABASE_URL="postgresql://neondb_owner:<password>@ep-<pooled-endpoint>-pooler.<region>.aws.neon.tech/neondb?sslmode=require"
+
+    # Direct connection string for Prisma migrations
+    DIRECT_DATABASE_URL="postgresql://neondb_owner:<password>@ep-<direct-endpoint>.<region>.aws.neon.tech/neondb?sslmode=require"
+
+    # ── Security ───────────────────────────────────────────────────────────────
+    JWT_SECRET="change-me-use-a-strong-random-string"
+
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_HOST="localhost"
+    REDIS_PORT=6379
+    REDIS_PASSWORD=""
+
+    # ── AI Providers (at least one is required) ───────────────────────────────
+    GEMINI_API_KEY="your-gemini-api-key"
+    OPENROUTER_API_KEY="your-openrouter-api-key"
+
+    # ── Grounding (defaults to enabled) ───────────────────────────────────────
+    ENABLE_AI_GROUNDING="true"
+    ENABLE_RULE_GROUNDING="true"
+
+    # ── App ───────────────────────────────────────────────────────────────────
+    NODE_ENV="development"
+    BACKEND_PORT=4000
+    FRONTEND_URL="http://localhost:3000"
+    BACKEND_URL="http://localhost:4000"
+    ```
+
+    **Key variable notes:**
+
+    - `DATABASE_URL` must be the **pooled** Neon connection string. The running application uses this for all queries.
+    - `DIRECT_DATABASE_URL` must be the **direct** (non-pooled) Neon connection string. Prisma uses this exclusively for migrations.
+    - `JWT_SECRET` must be a long, random string. In production, generate one with `openssl rand -base64 64`.
+    - You only need one AI key to get started. Set `GEMINI_API_KEY` for Google Gemini 2.0 Flash or `OPENROUTER_API_KEY` for OpenRouter-hosted models.
+
+    <Tip>
+      Google OAuth (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`) is optional for local development. Email/password authentication works out of the box without it.
+    </Tip>
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Start Redis">
+    The job queue and AI response cache both require a running Redis instance. For local development without authentication, spin one up with Docker:
 
     ```bash
-    your-cli init
+    docker run --name ai-analyzer-redis -p 6379:6379 -d redis:7-alpine
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+    Alternatively, if you prefer to start all local services (Redis + PostgreSQL) together, use the provided Compose file:
 
     ```bash
-    your-cli start
+    docker compose up -d
+    ```
+
+    <Note>
+      The `docker-compose.yml` in the repo root starts both `redis:7-alpine` and `postgres:16-alpine`. If you are connecting to a Neon database, you only need the Redis service — comment out the `postgres` service or start Redis individually as shown above.
+    </Note>
+
+    Verify Redis is responding:
+
+    ```bash
+    docker exec ai-analyzer-redis redis-cli ping
+    # Expected output: PONG
     ```
   </Step>
+
+  <Step title="Prepare the Database">
+    Generate the Prisma client from the schema, then apply the committed baseline migration to your target database.
+
+    ```bash
+    # Generate the Prisma client (required after any schema change)
+    pnpm db:generate
+
+    # Apply all committed migrations to your database
+    pnpm db:migrate:deploy
+    ```
+
+    <Warning>
+      Do not use `prisma db push` on shared, staging, or production databases. Always go through the migration workflow. For future local schema changes, create a tracked migration with `pnpm db:migrate:dev --name describe-your-change`.
+    </Warning>
+
+    You can verify the schema by opening Prisma Studio:
+
+    ```bash
+    pnpm db:studio
+    ```
+  </Step>
+
+  <Step title="Run the App">
+    Start the full monorepo in development mode. Turborepo will run the frontend and backend in parallel with hot reload enabled.
+
+    ```bash
+    pnpm dev
+    ```
+
+    Once the servers start, you will see:
+
+    ```
+    🚀 Backend running on http://localhost:4000
+    ✓ Ready on http://localhost:3000
+    ```
+
+    | Service | URL |
+    |---|---|
+    | Frontend (Next.js) | http://localhost:3000 |
+    | Backend API (NestJS) | http://localhost:4000 |
+    | Health check | http://localhost:4000/health |
+  </Step>
+
+  <Step title="Submit Your First Analysis">
+    With everything running, you are ready to analyze a startup idea. Open the web app in your browser at **http://localhost:3000**, register an account, and paste your idea into the submission form.
+
+    You can also call the API directly. First, register and log in to receive an `accessToken` cookie, then submit an idea:
+
+    ```bash
+    curl -X POST http://localhost:4000/analysis \
+      -H "Content-Type: application/json" \
+      -H "Cookie: accessToken=<your-token>" \
+      -d '{"idea": "A platform that helps remote teams track async work across time zones"}'
+    ```
+
+    A successful response returns the new analysis record with its `id` and an initial `status` of `PENDING`:
+
+    ```json
+    {
+      "id": "clx9f2m3k0000abc123def456",
+      "idea": "A platform that helps remote teams track async work across time zones",
+      "status": "PENDING",
+      "createdAt": "2025-01-01T00:00:00.000Z"
+    }
+    ```
+
+    **Poll for progress** while the 14 agents are running:
+
+    ```bash
+    curl http://localhost:4000/analysis/clx9f2m3k0000abc123def456/progress \
+      -H "Cookie: accessToken=<your-token>"
+    ```
+
+    ```json
+    {
+      "id": "clx9f2m3k0000abc123def456",
+      "status": "PROCESSING",
+      "progress": 45
+    }
+    ```
+
+    The `progress` field moves from `0` → `5` (queued) → `89` (Phase 1 complete) → `98` (Phase 2 complete) → `100` (database written). When `status` is `COMPLETED`, fetch the full report:
+
+    ```bash
+    curl http://localhost:4000/analysis/clx9f2m3k0000abc123def456 \
+      -H "Cookie: accessToken=<your-token>"
+    ```
+
+    <Tip>
+      The frontend polls `GET /analysis/:id/progress` automatically and updates the progress bar in real time. You do not need to poll manually when using the UI.
+    </Tip>
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## What to Do Next
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+After your first successful analysis, explore the other capabilities of the platform:
+
+- **Regenerate a section** — `POST /analysis/:id/regenerate/:section` re-runs a single agent without repeating the full pipeline.
+- **Chat about an analysis** — `POST /analysis/chat` lets you ask follow-up questions grounded in the existing report.
+- **Retry a failed analysis** — `POST /analysis/:id/retry` re-enqueues a job whose `status` is `FAILED`.
+- **Review your plan usage** — `GET /analysis/me/plan` returns your current tier and remaining analyses for the month.

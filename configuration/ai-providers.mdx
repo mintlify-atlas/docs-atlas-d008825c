@@ -1,0 +1,131 @@
+---
+title: "Configure AI Providers: Gemini and OpenRouter"
+sidebarTitle: "AI Providers"
+description: "Configure Google Gemini 2.0 Flash or OpenRouter as the AI backend for AI Startup Analyzer. Covers API key setup, provider priority, caching, and retry behavior."
+---
+
+AI Startup Analyzer routes every text generation request through a single `AIService` class in the NestJS backend. That service supports two providers — **Google Gemini 2.0 Flash** and **OpenRouter** — and selects between them automatically based on which API keys are present at startup. You need at least one key configured for any analysis to run. Responses are cached in Redis to avoid redundant API calls, and a built-in retry loop handles transient failures from either provider.
+
+## Supported Providers
+
+| Provider | Model | Key variable |
+|---|---|---|
+| Google Gemini | `gemini-2.0-flash` | `GEMINI_API_KEY` |
+| OpenRouter | `openai/gpt-4o-mini` | `OPENROUTER_API_KEY` |
+
+**Google Gemini 2.0 Flash** is Google's fast multimodal model, accessed through the `@google/generative-ai` SDK. It is a solid default for most deployments and does not require any proxy.
+
+**OpenRouter** is a unified API gateway that proxies requests to many underlying models. AI Startup Analyzer uses OpenRouter's `/api/v1/chat/completions` endpoint with `openai/gpt-4o-mini` as the default model. OpenRouter's key advantage is access to a broad catalogue of models behind a single API key and billing account.
+
+## Provider Selection Logic
+
+At module initialization `AIService` reads both keys and stores the valid ones. When `generate()` is called:
+
+1. If `OPENROUTER_API_KEY` is set and not the placeholder string `your-openrouter-api-key`, **OpenRouter is used**.
+2. Otherwise, if `GEMINI_API_KEY` is set and not the placeholder string `your-gemini-api-key`, **Gemini is used**.
+3. If neither key is configured, every generation call throws an error: `No AI service configured. Set GEMINI_API_KEY or OPENROUTER_API_KEY.`
+
+<Note>
+  Both keys can be set simultaneously. OpenRouter always takes priority when
+  both are valid. This makes it easy to keep Gemini as a documented fallback in
+  your `.env` while routing all live traffic through OpenRouter.
+</Note>
+
+## Setup
+
+<Tabs>
+  <Tab title="Google Gemini">
+    **1. Get an API key**
+
+    Go to [Google AI Studio](https://aistudio.google.com/app/apikey) and create an API key for the Gemini API. No billing setup is required for the free tier.
+
+    **2. Add the key to your environment**
+
+    ```env
+    GEMINI_API_KEY="AIza..."
+    ```
+
+    **3. Leave OpenRouter unset or as the placeholder**
+
+    ```env
+    # OPENROUTER_API_KEY is unset, so Gemini will be used
+    OPENROUTER_API_KEY="your-openrouter-api-key"
+    ```
+
+    **4. Verify at startup**
+
+    The backend logs `AIService` initialization. If the key is recognised you will see normal startup output. If both keys are placeholders, the first analysis request will fail with a configuration error logged at the `ERROR` level.
+  </Tab>
+  <Tab title="OpenRouter">
+    **1. Get an API key**
+
+    Create an account at [openrouter.ai](https://openrouter.ai/), navigate to **Keys**, and generate a new key. Add credits to your account to enable paid models.
+
+    **2. Add the key to your environment**
+
+    ```env
+    OPENROUTER_API_KEY="sk-or-v1-..."
+    ```
+
+    **3. Gemini key is not required when OpenRouter is set**
+
+    ```env
+    # Gemini key is optional when OpenRouter is active
+    GEMINI_API_KEY="your-gemini-api-key"
+    ```
+
+    **4. Model used by default**
+
+    The service calls `openai/gpt-4o-mini` with `max_tokens: 4000`. This model is available on all OpenRouter accounts with credits. To use a different model you would need to modify the `generateWithOpenRouter` call in `ai.service.ts`.
+  </Tab>
+</Tabs>
+
+## Full `.env` Examples
+
+<CodeGroup>
+```env Gemini only
+GEMINI_API_KEY="AIza..."
+# OPENROUTER_API_KEY is intentionally absent
+```
+
+```env OpenRouter only
+OPENROUTER_API_KEY="sk-or-v1-..."
+# GEMINI_API_KEY is intentionally absent
+```
+
+```env Both keys (OpenRouter takes priority)
+GEMINI_API_KEY="AIza..."
+OPENROUTER_API_KEY="sk-or-v1-..."
+# OpenRouter will be used; Gemini is ignored at runtime
+```
+</CodeGroup>
+
+## Response Caching
+
+Every prompt passed to `generate()` is hashed with SHA-256 and the digest is used as a Redis key (`ai:cache:<sha256>`). Before calling any provider, `AIService` checks Redis for a cached response. On a cache hit the stored string is returned immediately with no API call. On a miss the provider is called and the result is stored with a **24-hour TTL** (`86400` seconds) using Redis `SETEX`.
+
+The cache key is derived from the exact prompt text, so two analyses with identical startup ideas and identical system prompts will share cached outputs. Analyses with any difference in prompt content produce a distinct cache key.
+
+<Tip>
+  Redis caching can significantly reduce AI API costs during development and
+  testing. Repeated runs of the same startup idea — common when iterating on
+  prompts or debugging agents — hit the cache rather than consuming API quota.
+  In production, the 24-hour window means an identical idea submitted by two
+  different users within the same day costs only one API call.
+</Tip>
+
+If Redis is unavailable at startup (ping fails), `AIService` logs a warning and disables caching gracefully. The analysis pipeline continues to function; it simply calls the AI provider on every request.
+
+## Retry Behavior
+
+When a provider call fails, `AIService` retries up to **3 times** with an increasing delay:
+
+| Attempt | Delay before attempt |
+|---|---|
+| 1 | — (immediate) |
+| 2 | 1 500 ms |
+| 3 | 3 000 ms |
+
+The delay formula is `RETRY_DELAY_MS × attempt` where `RETRY_DELAY_MS = 1500`. After all three attempts fail, the original error is re-thrown and the BullMQ worker marks the job as failed. A failed job can be retried from the frontend via `POST /analysis/:id/retry`.
+
+Rate-limit errors (HTTP 429), transient network errors, and malformed responses from the provider are all caught by the retry loop. The logger emits a `WARN` entry for each failed attempt: `AI generate attempt N/3 failed: <message>`.

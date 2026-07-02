@@ -1,0 +1,625 @@
+---
+title: "Analysis Endpoints: Create, Query, and Manage Reports"
+sidebarTitle: "Analysis Endpoints"
+description: "REST endpoints for creating startup analyses, polling progress, retrieving reports, regenerating sections, chatting about results, and managing usage in AI Startup Analyzer."
+---
+
+The analysis endpoints are the core of the AI Startup Analyzer platform. They allow you to submit a startup idea for multi-agent AI processing, track processing progress, retrieve completed reports broken down across 13 strategic dimensions, regenerate any individual section on demand, chat conversationally with AI about your results, and inspect your plan's usage limits. Every endpoint under `/analysis` requires a valid `accessToken` cookie — see the [Authentication guide](/api-reference/authentication) for how to obtain one. State-changing requests (`POST`, `DELETE`) also require an `X-XSRF-TOKEN` header — see the [CSRF section](/api-reference/authentication#csrf-protection).
+
+---
+
+## GET /analysis/csrf-token
+
+Generates a cryptographically random CSRF token, sets it as a readable `XSRF-TOKEN` cookie, and returns it in the response body. Call this before any `POST` or `DELETE` request to `/analysis`.
+
+This endpoint **does** require authentication (the `accessToken` cookie), but does **not** require a CSRF header itself.
+
+### Response
+
+<ResponseField name="csrfToken" type="string">
+  A 64-character hex string generated from 32 cryptographically random bytes. Use this value as the `X-XSRF-TOKEN` header on subsequent state-changing requests.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token
+```
+
+```json 200 Response
+{
+  "csrfToken": "a3f87c2d1e4b5f6a8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /analysis
+
+Submits a startup idea for analysis. The server checks your plan's monthly limit, creates an `Analysis` record with status `PENDING`, enqueues it for multi-agent processing, and returns the new record immediately. Processing happens asynchronously — use `GET /analysis/:id/progress` to track completion.
+
+**Requires:** `accessToken` cookie + `X-XSRF-TOKEN` header.
+
+### Request Body
+
+<ParamField body="idea" type="string" required>
+  The startup idea to analyze. Must be at least 10 characters and no more than 2000 characters. Characters `< > " ' \`` are stripped, and prompt-injection patterns are removed before the idea is processed.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string">
+  CUID identifier for the newly created analysis. Use this in all subsequent calls.
+</ResponseField>
+
+<ResponseField name="idea" type="string">
+  The sanitized idea text as stored.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Initial value is always `"PENDING"`. Transitions to `PROCESSING`, then `COMPLETED` or `FAILED`.
+</ResponseField>
+
+<ResponseField name="userId" type="string">
+  The ID of the authenticated user who owns this analysis.
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Empty string on creation; populated as agents complete.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the analysis was created.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+### Errors
+
+| Status | Condition |
+|---|---|
+| `400 Bad Request` | `idea` field is missing, not a string, or shorter than 10 characters after trimming |
+| `401 Unauthorized` | Missing or invalid `accessToken` cookie |
+| `403 Forbidden` | Missing or invalid `X-XSRF-TOKEN` header |
+| `409 Conflict` | Monthly analysis limit reached for your current plan (FREE: 3, PRO: 50, TEAM: 999) |
+
+<CodeGroup>
+
+```bash curl
+CSRF=$(curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token | jq -r '.csrfToken')
+
+curl -s -b cookies.txt -c cookies.txt \
+  -X POST http://localhost:4000/analysis \
+  -H "Content-Type: application/json" \
+  -H "X-XSRF-TOKEN: $CSRF" \
+  -d '{
+    "idea": "A B2B SaaS platform that uses machine learning to predict customer churn in subscription businesses and recommends personalized retention campaigns to customer success teams."
+  }'
+```
+
+```json 201 Response
+{
+  "id": "clx4k7m2v0000abc123xyz789",
+  "userId": "clx4k2r1q0000def456uvw012",
+  "idea": "A B2B SaaS platform that uses machine learning to predict customer churn in subscription businesses and recommends personalized retention campaigns to customer success teams.",
+  "status": "PENDING",
+  "content": "",
+  "isPublic": false,
+  "version": 1,
+  "parentId": null,
+  "ideaAnalysis": null,
+  "comprehensiveIdeaAnalysis": null,
+  "marketResearch": null,
+  "competitorAnalysis": null,
+  "mvpPlan": null,
+  "monetization": null,
+  "goToMarket": null,
+  "finalReport": null,
+  "riskRadar": null,
+  "roadmap": null,
+  "businessModel": null,
+  "visionMission": null,
+  "brandIdentity": null,
+  "budgetEstimate": null,
+  "overallScore": null,
+  "marketDemandScore": null,
+  "profitPotentialScore": null,
+  "createdAt": "2024-06-15T10:30:00.000Z",
+  "updatedAt": "2024-06-15T10:30:00.000Z"
+}
+```
+
+```json 409 Response
+{
+  "statusCode": 409,
+  "message": "Monthly limit reached (3 for FREE plan)."
+}
+```
+
+</CodeGroup>
+
+---
+
+## GET /analysis/:id/progress
+
+Returns the current processing progress for an analysis. Poll this endpoint repeatedly until `status` is `COMPLETED` or `FAILED`. For completed analyses the server returns `progress: 100` without hitting the job queue; for failed analyses it returns `progress: 0`.
+
+**Requires:** `accessToken` cookie. No CSRF token needed (GET request).
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  The CUID of the analysis to check.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  One of `PENDING`, `PROCESSING`, `COMPLETED`, or `FAILED`.
+</ResponseField>
+
+<ResponseField name="progress" type="number">
+  An integer from `0` to `100` representing the percentage of agent steps completed. `100` when `COMPLETED`; `0` when `FAILED`.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl — poll until complete
+ANALYSIS_ID="clx4k7m2v0000abc123xyz789"
+
+while true; do
+  RESULT=$(curl -s -b cookies.txt \
+    http://localhost:4000/analysis/$ANALYSIS_ID/progress)
+  STATUS=$(echo $RESULT | jq -r '.status')
+  PROGRESS=$(echo $RESULT | jq -r '.progress')
+  echo "Status: $STATUS | Progress: $PROGRESS%"
+  if [[ "$STATUS" == "COMPLETED" || "$STATUS" == "FAILED" ]]; then
+    break
+  fi
+  sleep 3
+done
+```
+
+```json PROCESSING response
+{
+  "status": "PROCESSING",
+  "progress": 62
+}
+```
+
+```json COMPLETED response
+{
+  "status": "COMPLETED",
+  "progress": 100
+}
+```
+
+</CodeGroup>
+
+<Tip>
+  A polling interval of 2–4 seconds works well for most analyses. Processing typically takes 30–90 seconds depending on plan, model latency, and queue depth.
+</Tip>
+
+---
+
+## GET /analysis
+
+Returns a paginated list of all analyses belonging to the authenticated user, ordered by most recently created first. Only summary fields are returned (not the full agent results).
+
+**Requires:** `accessToken` cookie.
+
+### Query Parameters
+
+<ParamField query="skip" type="number">
+  Number of records to skip for pagination. Defaults to `0`.
+</ParamField>
+
+<ParamField query="take" type="number">
+  Number of records to return. Defaults to `20`, maximum `50`.
+</ParamField>
+
+### Response
+
+An array of analysis summary objects:
+
+<ResponseField name="id" type="string">
+  CUID of the analysis.
+</ResponseField>
+
+<ResponseField name="idea" type="string">
+  The startup idea text.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current status: `PENDING`, `PROCESSING`, `COMPLETED`, or `FAILED`.
+</ResponseField>
+
+<ResponseField name="overallScore" type="number | null">
+  Composite AI-assigned score (0–100). `null` until the analysis completes.
+</ResponseField>
+
+<ResponseField name="marketDemandScore" type="number | null">
+  Market demand sub-score. `null` until complete.
+</ResponseField>
+
+<ResponseField name="profitPotentialScore" type="number | null">
+  Profit potential sub-score. `null` until complete.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl — first page
+curl -s -b cookies.txt \
+  "http://localhost:4000/analysis?skip=0&take=20"
+```
+
+```bash curl — second page
+curl -s -b cookies.txt \
+  "http://localhost:4000/analysis?skip=20&take=20"
+```
+
+```json 200 Response
+[
+  {
+    "id": "clx4k7m2v0000abc123xyz789",
+    "idea": "A B2B SaaS platform that uses machine learning to predict customer churn...",
+    "status": "COMPLETED",
+    "overallScore": 78.5,
+    "marketDemandScore": 82.0,
+    "profitPotentialScore": 75.0,
+    "createdAt": "2024-06-15T10:30:00.000Z"
+  },
+  {
+    "id": "clx3j6l1u0000bcd234yza890",
+    "idea": "An AI-powered legal document summarizer for small business owners.",
+    "status": "COMPLETED",
+    "overallScore": 71.2,
+    "marketDemandScore": 69.0,
+    "profitPotentialScore": 74.5,
+    "createdAt": "2024-06-14T08:15:00.000Z"
+  }
+]
+```
+
+</CodeGroup>
+
+---
+
+## GET /analysis/:id
+
+Returns the full analysis record for a single analysis, including all agent result fields. Agent results are stored as JSON strings in the database; they are returned as parsed objects in the response.
+
+**Requires:** `accessToken` cookie. The analysis must belong to the authenticated user.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  The CUID of the analysis to retrieve.
+</ParamField>
+
+### Response
+
+The full `Analysis` object with all fields populated (those not yet generated remain `null`):
+
+<ResponseField name="id" type="string">CUID identifier.</ResponseField>
+<ResponseField name="idea" type="string">The original startup idea text.</ResponseField>
+<ResponseField name="status" type="string">`PENDING` | `PROCESSING` | `COMPLETED` | `FAILED`</ResponseField>
+<ResponseField name="ideaAnalysis" type="object | null">
+  <Expandable title="IdeaAnalysis fields">
+    <ResponseField name="summary" type="string">One-paragraph summary of the idea.</ResponseField>
+    <ResponseField name="coreProblem" type="string">The core problem being solved.</ResponseField>
+    <ResponseField name="targetUsers" type="string[]">List of target user personas.</ResponseField>
+    <ResponseField name="industry" type="string">Industry classification.</ResponseField>
+    <ResponseField name="useCases" type="string[]">Key use cases for the product.</ResponseField>
+  </Expandable>
+</ResponseField>
+<ResponseField name="comprehensiveIdeaAnalysis" type="object | null">Deep multi-dimension viability assessment including market opportunity, competitive analysis, target audience fit, financial feasibility, and risk assessment scores.</ResponseField>
+<ResponseField name="marketResearch" type="object | null">TAM/SAM/SOM sizing, growth trends, and geographic opportunities.</ResponseField>
+<ResponseField name="competitorAnalysis" type="object | null">Direct and indirect competitors with strengths, weaknesses, and pricing.</ResponseField>
+<ResponseField name="mvpPlan" type="object | null">Product name, tagline, core features (prioritized), KPIs, development complexity, and estimated time.</ResponseField>
+<ResponseField name="monetization" type="object | null">Recommended monetization model and pricing tiers.</ResponseField>
+<ResponseField name="goToMarket" type="object | null">Marketing channels, communities, partnerships, and growth hacks.</ResponseField>
+<ResponseField name="riskRadar" type="object | null">Risk factors and mitigation strategies.</ResponseField>
+<ResponseField name="roadmap" type="object | null">Development and launch roadmap.</ResponseField>
+<ResponseField name="businessModel" type="object | null">Business model canvas breakdown.</ResponseField>
+<ResponseField name="visionMission" type="object | null">Vision and mission statements.</ResponseField>
+<ResponseField name="brandIdentity" type="object | null">Brand positioning, voice, and identity recommendations.</ResponseField>
+<ResponseField name="budgetEstimate" type="object | null">Budget estimation across development, marketing, and operations.</ResponseField>
+<ResponseField name="overallScore" type="number | null">Composite score 0–100.</ResponseField>
+<ResponseField name="marketDemandScore" type="number | null">Market demand sub-score.</ResponseField>
+<ResponseField name="competitionScore" type="number | null">Competition intensity sub-score.</ResponseField>
+<ResponseField name="executionDifficultyScore" type="number | null">Execution difficulty sub-score.</ResponseField>
+<ResponseField name="profitPotentialScore" type="number | null">Profit potential sub-score.</ResponseField>
+<ResponseField name="createdAt" type="string">ISO 8601 creation timestamp.</ResponseField>
+<ResponseField name="updatedAt" type="string">ISO 8601 last-updated timestamp.</ResponseField>
+
+```bash curl
+curl -s -b cookies.txt \
+  http://localhost:4000/analysis/clx4k7m2v0000abc123xyz789
+```
+
+---
+
+## DELETE /analysis/:id
+
+Permanently deletes an analysis record and all its agent results. This action is irreversible.
+
+**Requires:** `accessToken` cookie + `X-XSRF-TOKEN` header.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  The CUID of the analysis to delete. Must belong to the authenticated user.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` when the record was successfully deleted.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+CSRF=$(curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token | jq -r '.csrfToken')
+
+curl -s -b cookies.txt \
+  -X DELETE http://localhost:4000/analysis/clx4k7m2v0000abc123xyz789 \
+  -H "X-XSRF-TOKEN: $CSRF"
+```
+
+```json 200 Response
+{
+  "success": true
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /analysis/:id/retry
+
+Re-queues a failed analysis for processing. Only analyses with `status = "FAILED"` can be retried. The status is reset to `PENDING` and a new job is added to the queue with a unique retry job ID to prevent collisions.
+
+**Requires:** `accessToken` cookie + `X-XSRF-TOKEN` header.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  The CUID of the failed analysis to retry.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` when the retry was successfully enqueued.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+CSRF=$(curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token | jq -r '.csrfToken')
+
+curl -s -b cookies.txt \
+  -X POST http://localhost:4000/analysis/clx4k7m2v0000abc123xyz789/retry \
+  -H "X-XSRF-TOKEN: $CSRF"
+```
+
+```json 200 Response
+{
+  "success": true
+}
+```
+
+</CodeGroup>
+
+<Note>
+  After calling retry, use `GET /analysis/:id/progress` to track the new processing run. A retry does **not** count against your monthly analysis limit.
+</Note>
+
+---
+
+## POST /analysis/:id/regenerate/:section
+
+Regenerates a single section of a completed analysis using the corresponding AI agent, and updates the stored value. This is useful for refreshing stale results or getting alternative outputs without re-running the full analysis pipeline.
+
+**Requires:** `accessToken` cookie + `X-XSRF-TOKEN` header.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  The CUID of the analysis whose section should be regenerated.
+</ParamField>
+
+<ParamField path="section" type="string" required>
+  The section slug to regenerate. Must be one of the values listed below.
+</ParamField>
+
+### Section Slugs
+
+| Slug | Description |
+|---|---|
+| `idea-analysis` | Core problem, target users, industry, and use cases |
+| `comprehensive-idea-analysis` | Multi-dimension viability scoring across 6 categories |
+| `market-research` | TAM/SAM/SOM, growth trends, geographic opportunities |
+| `competitor-analysis` | Direct and indirect competitors with SWOT breakdown |
+| `mvp` | Product name, features (MoSCoW priority), KPIs, feasibility |
+| `monetization` | Recommended model, pricing tiers, reasoning |
+| `go-to-market` | Channels, communities, partnerships, growth hacks |
+| `risk-radar` | Risk factors and mitigation strategies |
+| `roadmap` | Phased development and launch roadmap |
+| `business-model` | Business model canvas |
+| `vision-mission` | Vision and mission statement generation |
+| `brand-identity` | Brand positioning, voice, and visual identity |
+| `budget` | Budget estimation across cost categories |
+
+### Response
+
+Returns an object with a single key matching the regenerated section's database field name and the newly generated result as the value.
+
+<CodeGroup>
+
+```bash curl — regenerate market research
+CSRF=$(curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token | jq -r '.csrfToken')
+
+curl -s -b cookies.txt \
+  -X POST http://localhost:4000/analysis/clx4k7m2v0000abc123xyz789/regenerate/market-research \
+  -H "X-XSRF-TOKEN: $CSRF"
+```
+
+```json 200 Response — market-research
+{
+  "marketResearch": {
+    "marketDemand": "High — the customer success tooling market is growing at 18% CAGR driven by SaaS expansion.",
+    "tam": "$12.4B globally",
+    "sam": "$3.1B (SMB and mid-market SaaS companies)",
+    "som": "$155M (attainable in 5 years with focused GTM)",
+    "growthTrends": [
+      "Increasing SaaS adoption driving need for churn prevention",
+      "AI/ML becoming table stakes in CS platforms",
+      "Shift from reactive to predictive CS workflows"
+    ],
+    "geographicOpportunities": [
+      "North America (primary)",
+      "Western Europe",
+      "APAC SaaS hubs (Singapore, Australia)"
+    ]
+  }
+}
+```
+
+```json 404 Response — unknown section
+{
+  "statusCode": 404,
+  "message": "Unknown section: invalid-slug"
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /analysis/chat
+
+Sends a conversational message to the AI, optionally grounded in a specific analysis report as context. Returns a concise AI-generated reply. Ideal for follow-up questions, clarifications, or exploring specific aspects of a report.
+
+**Rate limit:** 10 requests per 60 seconds per user.
+
+**Requires:** `accessToken` cookie + `X-XSRF-TOKEN` header.
+
+### Request Body
+
+<ParamField body="message" type="string" required>
+  The question or message to send to the AI assistant. Maximum 500 characters after trimming. Must not be empty.
+</ParamField>
+
+<ParamField body="context" type="string" required>
+  The analysis report content to use as grounding context for the AI response. Maximum 3000 characters. Pass a stringified summary or the relevant section text from a completed analysis.
+</ParamField>
+
+<ParamField body="analysisId" type="string">
+  Optional CUID of an analysis. When provided, the server verifies the analysis belongs to the authenticated user before processing the message. This is recommended to prevent context injection.
+</ParamField>
+
+### Response
+
+<ResponseField name="reply" type="string">
+  The AI assistant's response to the message, grounded in the provided context.
+</ResponseField>
+
+### Errors
+
+| Status | Condition |
+|---|---|
+| `400 Bad Request` | `message` is empty or missing; `analysisId` provided but analysis not found |
+| `429 Too Many Requests` | More than 10 chat requests in the past 60 seconds |
+
+<CodeGroup>
+
+```bash curl
+CSRF=$(curl -s -b cookies.txt -c cookies.txt \
+  http://localhost:4000/analysis/csrf-token | jq -r '.csrfToken')
+
+curl -s -b cookies.txt \
+  -X POST http://localhost:4000/analysis/chat \
+  -H "Content-Type: application/json" \
+  -H "X-XSRF-TOKEN: $CSRF" \
+  -d '{
+    "message": "What are the top 3 risks I should focus on first?",
+    "context": "Market demand is high, competition is moderate. Key risks include regulatory uncertainty, high CAC in enterprise sales, and dependency on third-party ML infrastructure.",
+    "analysisId": "clx4k7m2v0000abc123xyz789"
+  }'
+```
+
+```json 200 Response
+{
+  "reply": "Based on your analysis, the three risks to prioritize are: 1) High customer acquisition cost in enterprise sales — consider starting with PLG (product-led growth) to reduce CAC before investing in outbound. 2) Dependency on third-party ML infrastructure — evaluate building a thin abstraction layer over your AI provider to reduce lock-in. 3) Regulatory uncertainty — proactively engage legal counsel for GDPR and SOC 2 compliance early, as enterprise buyers will require it."
+}
+```
+
+</CodeGroup>
+
+---
+
+## GET /analysis/me/plan
+
+Returns the authenticated user's current subscription plan, the number of analyses used this calendar month, and the monthly limit for their plan.
+
+**Requires:** `accessToken` cookie.
+
+### Response
+
+<ResponseField name="plan" type="string">
+  The user's current plan: `"FREE"`, `"PRO"`, or `"TEAM"`.
+</ResponseField>
+
+<ResponseField name="used" type="number">
+  Number of analyses created in the current calendar month.
+</ResponseField>
+
+<ResponseField name="limit" type="number">
+  Maximum analyses allowed per month for the current plan. FREE = 3, PRO = 50, TEAM = 999.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl -s -b cookies.txt \
+  http://localhost:4000/analysis/me/plan
+```
+
+```json 200 Response — FREE plan
+{
+  "plan": "FREE",
+  "used": 2,
+  "limit": 3
+}
+```
+
+```json 200 Response — PRO plan
+{
+  "plan": "PRO",
+  "used": 17,
+  "limit": 50
+}
+```
+
+</CodeGroup>
+
+<Note>
+  The monthly usage counter resets at the start of each calendar month. If you receive a `409 Conflict` from `POST /analysis`, check this endpoint to confirm your current usage and consider upgrading your plan.
+</Note>

@@ -1,0 +1,177 @@
+---
+title: "Database Setup and Migrations with Prisma"
+sidebarTitle: "Database"
+description: "Set up Neon PostgreSQL and manage schema migrations with Prisma 6 in AI Startup Analyzer. Covers connection strings, migration commands, and Prisma Studio."
+---
+
+AI Startup Analyzer uses Prisma 6 as its ORM and Neon PostgreSQL as the recommended managed database provider, though any standard PostgreSQL instance works equally well. The schema defines three models — `User`, `RefreshToken`, and `Analysis` — and the `Analysis` model stores the outputs of more than a dozen AI agents as JSON strings alongside a set of numeric scores that power the startup evaluation dashboard. This page walks through configuring your connection strings, understanding the schema, and running migrations safely across development, staging, and production environments.
+
+## Connection Strings
+
+Prisma requires two separate PostgreSQL connection strings when using a connection pooler (such as Neon's built-in PgBouncer):
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | **Pooled** connection string — used by the running application for all queries at runtime. Routes through PgBouncer to keep connection counts low. |
+| `DIRECT_DATABASE_URL` | **Direct** connection string — used by Prisma Migrate and the Prisma schema engine. Must bypass the pooler because migrations require session-level features that PgBouncer does not support. |
+
+Both variables must be set in your `.env` file (development) and as environment variables on your server or container (production). The `.env.example` file in the repository root shows the expected format:
+
+```bash
+# DATABASE_URL: pooled connection string (used by the running app)
+DATABASE_URL="postgresql://neondb_owner:<password>@ep-<pooled-endpoint>-pooler.<region>.aws.neon.tech/neondb?sslmode=require"
+
+# DIRECT_DATABASE_URL: direct connection string (used by Prisma migrations)
+DIRECT_DATABASE_URL="postgresql://neondb_owner:<password>@ep-<direct-endpoint>.<region>.aws.neon.tech/neondb?sslmode=require"
+```
+
+<Note>
+In the Neon dashboard, the **pooled** connection string contains `-pooler` in the hostname. The **direct** string points to the endpoint without `-pooler`. Copy both strings from the **Connection Details** panel of your Neon project and paste them into your environment file.
+</Note>
+
+## Prisma Schema
+
+The schema lives at `packages/db/prisma/schema.prisma` and defines three models. Below is an annotated overview of each.
+
+### User
+
+Stores authenticated users, their subscription plan, and Stripe billing identifiers. Each user can own many `Analysis` records and many `RefreshToken` records.
+
+```prisma
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Subscription
+  plan              String   @default("FREE")
+  stripeCustomerId  String?  @unique
+  stripeSubId       String?  @unique
+  analysesThisMonth Int      @default(0)
+  monthResetAt      DateTime @default(now())
+
+  analyses      Analysis[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+```
+
+### RefreshToken
+
+Stores JWT refresh tokens linked to users. Tokens are deleted automatically when the parent user is deleted (`onDelete: Cascade`). An index on `userId` keeps token lookup fast.
+
+```prisma
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+  @@index([userId])
+}
+```
+
+### Analysis
+
+The central model of the application. Each row represents one startup analysis job, starting in `PENDING` status and progressing through the agent pipeline.
+
+```prisma
+model Analysis {
+  id       String  @id @default(cuid())
+  userId   String
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  idea     String
+  content  String
+  status   String  @default("PENDING")
+  isPublic Boolean @default(false)
+  version  Int     @default(1)
+  parentId String?
+
+  // Agent Results (stored as JSON strings)
+  ideaAnalysis              String?
+  comprehensiveIdeaAnalysis String?
+  marketResearch            String?
+  competitorAnalysis        String?
+  mvpPlan                   String?
+  monetization              String?
+  goToMarket                String?
+  finalReport               String?
+  riskRadar                 String?
+  roadmap                   String?
+  businessModel             String?
+  visionMission             String?
+  brandIdentity             String?
+  budgetEstimate            String?
+
+  // Scoring (Float, nullable until analysis completes)
+  marketDemandScore        Float?
+  competitionScore         Float?
+  executionDifficultyScore Float?
+  profitPotentialScore     Float?
+  overallScore             Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("analyses")
+  @@index([userId])
+  @@index([status])
+  @@index([isPublic])
+}
+```
+
+<Note>
+The `status` field follows this lifecycle: `PENDING` → `PROCESSING` → `COMPLETED` or `FAILED`. A job enters `PROCESSING` when BullMQ picks it up from the queue. If any agent step throws an unrecoverable error the row is marked `FAILED` and the error is surfaced to the frontend. Indexes on `status` and `isPublic` keep filtered list queries efficient as the table grows.
+</Note>
+
+The agent result fields (`ideaAnalysis`, `marketResearch`, `competitorAnalysis`, `mvpPlan`, `monetization`, `goToMarket`, `finalReport`, `riskRadar`, `roadmap`, `businessModel`, `visionMission`, `brandIdentity`, `budgetEstimate`) are stored as serialised JSON strings. Each field is populated by a dedicated AI agent that runs as part of the BullMQ analysis pipeline.
+
+The five score fields (`marketDemandScore`, `competitionScore`, `executionDifficultyScore`, `profitPotentialScore`, `overallScore`) are `Float` values between 0 and 100, derived from the agent results and written to the row once the pipeline completes.
+
+## Migration Commands
+
+All database commands are defined at the monorepo root and delegate to Prisma CLI via `pnpm`.
+
+<CodeGroup>
+
+```bash Regenerate Prisma Client
+pnpm db:generate
+```
+
+```bash Create a new development migration
+pnpm db:migrate:dev --name <descriptive-name>
+```
+
+```bash Apply migrations to a target database
+pnpm db:migrate:deploy
+```
+
+```bash Open Prisma Studio
+pnpm db:studio
+```
+
+</CodeGroup>
+
+### Command Reference
+
+| Command | When to use |
+|---|---|
+| `pnpm db:generate` | After any change to `schema.prisma` to regenerate the type-safe Prisma Client. Run this before building the backend. |
+| `pnpm db:migrate:dev --name <change>` | During development to create a new SQL migration file in `packages/db/prisma/migrations/` and apply it to your local database. The `--name` flag sets the human-readable suffix on the migration folder. |
+| `pnpm db:migrate:deploy` | In CI, in the production container startup script, or when manually promoting migrations to a staging or production database. This command applies all pending committed migrations without creating new ones. |
+| `pnpm db:studio` | To browse and edit database records through a local GUI at `http://localhost:5555`. Useful for inspecting analysis jobs during development. |
+
+<Warning>
+Never run `prisma db push` against a shared, staging, or production database. `db push` applies schema changes without generating a migration file, which means the change is not tracked in version control and cannot be reliably reproduced or rolled back. Always use `db:migrate:dev` locally to create a migration file, commit it, and promote it to other environments with `db:migrate:deploy`.
+</Warning>
+
+## Automatic Migrations in Production
+
+When using the Docker production stack, the backend container runs `prisma migrate deploy` automatically as part of its startup command before the NestJS server process begins. This means migrations are applied on every container start, including rolling deployments and container restarts. You do not need to run migrations manually against your production database as long as `DIRECT_DATABASE_URL` is correctly set in the backend container environment. See the [Docker deployment guide](/deployment/docker) for details.

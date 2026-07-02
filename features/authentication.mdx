@@ -1,0 +1,279 @@
+---
+title: "Authentication: JWT, OAuth, and CSRF Protection"
+sidebarTitle: "Authentication"
+description: "AI Startup Analyzer uses JWT cookies for stateless auth, Google OAuth 2.0 for social login, and the Double Submit Cookie pattern for CSRF protection."
+---
+
+AI Startup Analyzer uses a cookie-based JWT authentication strategy. Access tokens and refresh tokens are stored in `httpOnly` cookies rather than being returned in response bodies or expected in `Authorization` headers. This approach means tokens are never accessible to JavaScript running on the page, which eliminates an entire class of cross-site scripting (XSS) token theft. Two login methods are supported: email and password, and Google OAuth 2.0.
+
+## Token Storage and Lifetimes
+
+When you register or log in, the server sets two `httpOnly` cookies on the response:
+
+| Cookie | Lifetime | Purpose |
+|---|---|---|
+| `accessToken` | 7 days | Authenticates API requests via the JWT guard |
+| `refreshToken` | 30 days | Used to obtain a new access token when it expires |
+
+Both cookies are set with `secure: true` and `sameSite: strict` in production environments, and with `sameSite: lax` in development. Because they are `httpOnly`, they cannot be read or modified by client-side JavaScript.
+
+Refresh tokens are stored in the database and rotated on every use — when you call the refresh endpoint, the old refresh token is deleted and a new one is issued alongside a new access token.
+
+## Registration
+
+```http
+POST /auth/register
+```
+
+**Request body:**
+
+```json
+{
+  "email": "alice@example.com",
+  "password": "Str0ng!Pass#2024",
+  "name": "Alice"
+}
+```
+
+Password requirements enforced by the server:
+- Minimum 10 characters, maximum 128
+- At least one lowercase letter
+- At least one uppercase letter
+- At least one digit
+- At least one special character (`!@#$%^&*()` etc.)
+
+**Success response (`201`):**
+
+```json
+{
+  "user": {
+    "id": "clxyz123",
+    "email": "alice@example.com",
+    "name": "Alice",
+    "plan": "FREE"
+  }
+}
+```
+
+The `accessToken` and `refreshToken` cookies are set automatically on the response. A `409 Conflict` is returned if the email is already registered.
+
+**Rate limits:** 5 requests per minute, 20 per hour.
+
+## Login
+
+```http
+POST /auth/login
+```
+
+**Request body:**
+
+```json
+{
+  "email": "alice@example.com",
+  "password": "Str0ng!Pass#2024"
+}
+```
+
+**Success response (`200`):**
+
+```json
+{
+  "user": {
+    "id": "clxyz123",
+    "email": "alice@example.com",
+    "name": "Alice",
+    "plan": "FREE"
+  }
+}
+```
+
+The auth cookies are set on the response. An `UnauthorizedException` (401) is returned for invalid credentials — the error message does not distinguish between an unknown email and a wrong password.
+
+**Rate limits:** 10 requests per minute, 50 per hour.
+
+## Token Refresh
+
+When the `accessToken` cookie expires, call the refresh endpoint with the current refresh token:
+
+```http
+POST /auth/refresh
+```
+
+**Request body:**
+
+```json
+{
+  "refreshToken": "<your-refresh-token>"
+}
+```
+
+**Success response (`200`):**
+
+```json
+{
+  "accessToken": "<new-jwt>",
+  "refreshToken": "<new-refresh-token>"
+}
+```
+
+The old refresh token is deleted from the database and a new one is returned. If the token is expired or not found, the server returns `401 Unauthorized`.
+
+## Logout
+
+```http
+POST /auth/logout
+```
+
+**Request body:**
+
+```json
+{
+  "refreshToken": "<your-refresh-token>"
+}
+```
+
+The refresh token is deleted from the database, invalidating that session. All other active sessions (on other devices) remain valid until their own tokens expire or are explicitly logged out.
+
+## Getting the Current User
+
+To retrieve the authenticated user's identity using the current `accessToken` cookie:
+
+```http
+GET /auth/me
+```
+
+**Success response (`200`):**
+
+```json
+{
+  "user": {
+    "id": "clxyz123",
+    "email": "alice@example.com"
+  }
+}
+```
+
+This endpoint is guarded by `JwtAuthGuard`. A `401` is returned if the cookie is missing or the token is invalid.
+
+## Google OAuth 2.0
+
+Users can sign in with their Google account without setting a password.
+
+<Steps>
+  <Step title="Initiate the OAuth Flow">
+    Redirect the user's browser to:
+
+    ```http
+    GET /auth/google
+    ```
+
+    The server redirects to Google's OAuth consent screen.
+  </Step>
+  <Step title="Google Redirects Back">
+    After the user grants access, Google calls:
+
+    ```http
+    GET /auth/google/callback
+    ```
+
+    The Passport `google` strategy validates the OAuth code and extracts the user's Google profile.
+  </Step>
+  <Step title="Account Lookup or Creation">
+    The server calls `findOrCreateGoogleUser`. If no user with that email exists, a new account is created with a cryptographically random unusable password (the account can only be accessed via Google OAuth or future password reset). If an account already exists with that email, it is used as-is regardless of how it was originally created.
+  </Step>
+  <Step title="Cookies Set and Redirect">
+    The server sets the `accessToken` and `refreshToken` cookies and redirects the browser to:
+
+    ```
+    {FRONTEND_URL}/auth/callback
+    ```
+
+    The frontend reads the cookies from the browser's cookie store and treats the user as logged in.
+  </Step>
+</Steps>
+
+## CSRF Protection
+
+State-changing requests (POST, PUT, PATCH, DELETE) are protected using the **Double Submit Cookie** pattern. The server sets an `XSRF-TOKEN` cookie that your client must read and echo back in a request header.
+
+**Step 1 — Obtain the CSRF token:**
+
+```http
+GET /analysis/csrf-token
+```
+
+This sets an `XSRF-TOKEN` cookie in the browser. Because the cookie is readable by JavaScript (it is not `httpOnly`), your frontend can extract its value.
+
+**Step 2 — Include the token in subsequent state-changing requests:**
+
+```http
+X-XSRF-TOKEN: <value-from-XSRF-TOKEN-cookie>
+```
+
+A cross-origin attacker cannot read the `XSRF-TOKEN` cookie value due to the browser's same-origin policy, so they cannot forge the header even if they can trigger the request.
+
+## Code Examples
+
+<CodeGroup>
+
+```bash Register
+curl -X POST https://api.example.com/auth/register \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{
+    "email": "alice@example.com",
+    "password": "Str0ng!Pass#2024",
+    "name": "Alice"
+  }'
+```
+
+```bash Login
+curl -X POST https://api.example.com/auth/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{
+    "email": "alice@example.com",
+    "password": "Str0ng!Pass#2024"
+  }'
+```
+
+```bash Authenticated Request
+# 1. Get CSRF token (saves cookies from the response)
+curl -X GET https://api.example.com/analysis/csrf-token \
+  -b cookies.txt -c cookies.txt
+
+# 2. Extract XSRF-TOKEN value from cookies.txt, then submit an analysis
+curl -X POST https://api.example.com/analysis \
+  -H "Content-Type: application/json" \
+  -H "X-XSRF-TOKEN: <xsrf-token-value>" \
+  -b cookies.txt \
+  -d '{"idea": "A SaaS platform that helps solo founders validate startup ideas before building."}'
+```
+
+```bash Refresh Token
+curl -X POST https://api.example.com/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refreshToken": "<your-refresh-token>"
+  }'
+```
+
+```bash Logout
+curl -X POST https://api.example.com/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refreshToken": "<your-refresh-token>"
+  }'
+```
+
+</CodeGroup>
+
+## Rate Limiting Summary
+
+| Endpoint | Per Minute | Per Hour |
+|---|---|---|
+| `POST /auth/register` | 5 | 20 |
+| `POST /auth/login` | 10 | 50 |
+| Chat endpoints | 10 | — |
+
+Rate limit responses return `429 Too Many Requests`. Clients should implement exponential backoff before retrying.
